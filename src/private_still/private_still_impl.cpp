@@ -109,74 +109,73 @@ static void camera_control_callback(MMAL_PORT_T*          port  ,
 /**
  * Camera callbacks
  */
-static void buffer_callback(MMAL_PORT_T*          port  ,
-                            MMAL_BUFFER_HEADER_T* buffer)
+static void encoder_buffer_callback(MMAL_PORT_T*          port  ,
+                                    MMAL_BUFFER_HEADER_T* buffer)
 {
-    RASPICAM_USERDATA* userdata = (RASPICAM_USERDATA*) port->userdata;
+    bool               flag_complete = false;
+    RASPICAM_USERDATA* userdata      = (RASPICAM_USERDATA*) port->userdata;
 
     if ( (userdata                != NULL) &&
          (userdata->handle_camera != NULL)   )
     {
-        const uint flags = buffer->flags;
-
-        mmal_buffer_header_mem_lock(buffer);
+        if (buffer->length && userdata->data)
         {
-            for (size_t idx = 0; idx < buffer->length; ++idx, ++userdata->buffer_position)
+            if (userdata->length < buffer->length)
             {
-                if (userdata->offset >= userdata->length)
-                {
-                    std::cerr << userdata->handle_camera->API_NAME << ": Buffer provided was too small! Failed to copy data into buffer." << std::endl;
-
-                    userdata->handle_camera = NULL;
-                    break;
-                }
-                else
-                {
-                    if (userdata->handle_camera->getEncoding() == RASPICAM_ENCODING_RGB)
-                    {
-                        // Determines if the byte is an RGB value
-                        if (userdata->buffer_position >= 54)
-                        {
-                            userdata->data[userdata->offset] = buffer->data[idx];
-                            ++userdata->offset;
-                        }
-                    }
-                    else
-                    {
-                        userdata->data[userdata->offset] = buffer->data[idx];
-                        ++userdata->offset;
-                    }
-                }
-            }
-        }
-        mmal_buffer_header_mem_unlock(buffer);
-
-        const uint END_FLAG = flags & (MMAL_BUFFER_HEADER_FLAG_FRAME_END | /* bitwise_or */
-                                       MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED);
-
-
-        if (END_FLAG != 0)
-        {
-            if (userdata->mutex == NULL)
-            {
-                userdata->callback_image(userdata->data                              ,
-                                         userdata->offset_starting                   ,
-                                         userdata->length - userdata->offset_starting);
+                flag_complete = true;
+                std::cerr << "Unable to write buffer user memory - aborting\n";
             }
             else
             {
-                sem_post(userdata->mutex);
+                // Get data from buffer
+                mmal_buffer_header_mem_lock(buffer);
+                memcpy(userdata->data, buffer->data, buffer->length);
+                mmal_buffer_header_mem_unlock(buffer);
             }
         }
+
+        // Update flag of completion
+        if (buffer->flags & (MMAL_BUFFER_HEADER_FLAG_FRAME_END           |
+                             MMAL_BUFFER_HEADER_FLAG_TRANSMISSION_FAILED) )
+        {
+            flag_complete = true;
+        }
+    }
+    else
+    {
+        std::cerr << "Received a encoder buffer callback with no userdata\n";
     }
 
     mmal_buffer_header_release(buffer);
 
+    // Send new buffer to port
     if (port->is_enabled)
     {
-        MMAL_BUFFER_HEADER_T* new_buffer = mmal_queue_get(userdata->encoder_pool->queue);
+        MMAL_STATUS_T          status     = MMAL_SUCCESS;
+        MMAL_BUFFER_HEADER_T*  new_buffer = mmal_queue_get(userdata->encoder_pool->queue);
 
-        if (new_buffer) mmal_port_send_buffer(port, new_buffer);
+        if (new_buffer)
+        {
+            status = mmal_port_send_buffer(port, new_buffer);
+        }
+        if (!new_buffer || (status != MMAL_SUCCESS) )
+        {
+            std::cerr << "Unable to return a buffer to the encoder port\n";
+        }
+    }
+
+    if (flag_complete)
+    {
+        if (userdata->mutex == NULL)
+        {
+            userdata->callback_image(userdata->data                              ,
+                                     userdata->offset_starting                   ,
+                                     userdata->length - userdata->offset_starting);
+        }
+        else
+        {
+            sem_post(userdata->mutex);
+        }
     }
 }
 
@@ -191,6 +190,7 @@ Private_Impl_Still::Private_Impl_Still(void)
     // Camera initialized flag
     _is_initialized      = false;
     _camera_name         = "";
+    _raw_mode            = false;
 
     // MMAL Components pointers
     _camera              = NULL;
@@ -329,13 +329,13 @@ void Private_Impl_Still::commitParameters(void)
     // Set Video Stabilization
     if (mmal_port_parameter_set_boolean(_camera->control, MMAL_PARAMETER_VIDEO_STABILISATION, 0) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set video stabilization parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set video stabilization parameter.\n";
     }
 
     // Set Exposure Compensation
     if (mmal_port_parameter_set_int32(_camera->control, MMAL_PARAMETER_EXPOSURE_COMP, 0) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set exposure compensation parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set exposure compensation parameter.\n";
     }
 
     // Set Color Efects
@@ -345,7 +345,7 @@ void Private_Impl_Still::commitParameters(void)
                               colfx.v      = 128;
     if (mmal_port_parameter_set(_camera->control, &colfx.hdr) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set color effects parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set color effects parameter.\n";
     }
 
     // Set ROI
@@ -356,7 +356,7 @@ void Private_Impl_Still::commitParameters(void)
                                 crop.rect.height = (65536 * 1);
     if (mmal_port_parameter_set(_camera->control, &crop.hdr) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set ROI parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set ROI parameter.\n";
     }
 
     // Set encoder encoding
@@ -471,7 +471,6 @@ int Private_Impl_Still::createCamera(void)
 
     // Commit configuration parameters
     this->commitParameters();
-
 
     // Change fps range if necessary, according to shutter_speed // FIXME
     if (_shutter_speed > 6e6)
@@ -649,44 +648,6 @@ void Private_Impl_Still::destroyEncoder(void)
 /**
  *
  */
-void Private_Impl_Still::disablePorts(void)
-{
-    std::cout << "Disabling ports..." << std::endl;
-
-    if (_port_camera         && _port_camera        ->is_enabled)  mmal_port_disable(_port_camera        );
-    if (_port_encoder_input  && _port_encoder_input ->is_enabled)  mmal_port_disable(_port_encoder_input );
-
-    if (_port_encoder_output && _port_encoder_output->is_enabled)
-    {
-        std::cout << "_port_encoder_output as enabled!!!" << std::endl;
-
-        if (mmal_port_disable(_port_encoder_output))
-        {
-            delete (RASPICAM_USERDATA*) _port_encoder_output->userdata;
-        }
-    }
-
-    std::cout << "Disabling ports...DONE" << std::endl;
-}
-
-
-/**
- *
- */
-void Private_Impl_Still::disableComponents(void)
-{
-    std::cout << "disableComponents..." << std::endl;
-    if (_encoder) mmal_component_disable(_encoder);
-    std::cout << "disableComponents...ENCODER" << std::endl;
-    if (_camera ) mmal_component_disable(_camera);
-    std::cout << "disableComponents...CAMERA" << std::endl;
-    std::cout << "disableComponents...DONE" << std::endl;
-}
-
-
-/**
- *
- */
 int Private_Impl_Still::initialize(void)
 {
     if (_is_initialized) return 0;
@@ -847,19 +808,43 @@ int Private_Impl_Still::startCapture(imageTakenCallback  callback_user    ,
  */
 int Private_Impl_Still::startCapture(void)
 {
+    // Veirfy if camera port is active
+    if (!_port_camera)
+    {
+        std::cerr << API_NAME << ": Camera power was not active for capture.\n";
+        return -1;
+    }
+
+    // Enable raw mode capture if specified
+    if (_raw_mode)
+    {
+        if (mmal_port_parameter_set_boolean(_port_camera, MMAL_PARAMETER_ENABLE_RAW_CAPTURE, 1) != MMAL_SUCCESS)
+        {
+            std::cerr << API_NAME << ": RAW was requested, but failed to enable.\n";
+            return -1;
+        }
+    }
+
+    // There is a possibility that shutter needs to be set each loop. (raspistill code)
+    if (mmal_port_parameter_set_uint32(_camera->control, MMAL_PARAMETER_SHUTTER_SPEED, _shutter_speed) != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Unable to set shutter speed.\n";
+        return -1;
+    }
+
     // If the parameters were changed and this function wasn't called, it will be called here
     // However if the parameters weren't changed, the function won't do anything - it will return right away
     commitParameters();
 
     if (_port_encoder_output->is_enabled)
     {
-        std::cerr << API_NAME << ": Could not enable encoder output port. Try waiting longer before attempting to take another picture." << std::endl;
+        std::cerr << API_NAME << ": Could not enable encoder output port. Try waiting longer before attempting to take another picture.\n";
         return -1;
     }
 
-    if (mmal_port_enable(_port_encoder_output, buffer_callback) != MMAL_SUCCESS)
+    if (mmal_port_enable(_port_encoder_output, encoder_buffer_callback) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Could not enable encoder output port." << std::endl;
+        std::cerr << API_NAME << ": Could not enable encoder output port.\n";
         return -1;
     }
 
@@ -871,18 +856,18 @@ int Private_Impl_Still::startCapture(void)
 
         if (!buffer)
         {
-            std::cerr << API_NAME << ": Could not get buffer (#" << idx << ") from pool queue." << std::endl;
+            std::cerr << API_NAME << ": Could not get buffer (#" << idx << ") from pool queue.\n";
         }
 
         if (mmal_port_send_buffer(_port_encoder_output, buffer) != MMAL_SUCCESS)
         {
-            std::cerr << API_NAME << ": Could not send a buffer (#" << idx << ") to encoder output port." << std::endl;
+            std::cerr << API_NAME << ": Could not send a buffer (#" << idx << ") to encoder output port.\n";
         }
     }
 
     if (mmal_port_parameter_set_boolean(_port_camera, MMAL_PARAMETER_CAPTURE, 1) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to start capture." << std::endl;
+        std::cerr << API_NAME << ": Failed to start capture.\n";
         return -1;
     }
 
@@ -1095,7 +1080,7 @@ void Private_Impl_Still::commitBrightness(void)
 {
     if (mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_BRIGHTNESS, (MMAL_RATIONAL_T) {int(_brightness), 100}) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set brightness parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set brightness parameter.\n";
     }
 }
 
@@ -1109,7 +1094,7 @@ void Private_Impl_Still::commitQuality(void)
     {
         if (mmal_port_parameter_set_uint32(_port_encoder_output, MMAL_PARAMETER_JPEG_Q_FACTOR, _quality) != MMAL_SUCCESS)
         {
-            std::cerr << API_NAME << ": Failed to set JPEG quality parameter." << std::endl;
+            std::cerr << API_NAME << ": Failed to set JPEG quality parameter.\n";
         }
     }
 }
@@ -1125,7 +1110,7 @@ void Private_Impl_Still::commitRotation(void)
          (mmal_port_parameter_set_int32(_camera->output[1], MMAL_PARAMETER_ROTATION, rotation) != MMAL_SUCCESS) ||
          (mmal_port_parameter_set_int32(_camera->output[2], MMAL_PARAMETER_ROTATION, rotation) != MMAL_SUCCESS)   )
     {
-        std::cerr << API_NAME << ": Failed to set rotation parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set rotation parameter.\n";
     }
 }
 
@@ -1137,7 +1122,7 @@ void Private_Impl_Still::commitISO(void)
 {
     if (mmal_port_parameter_set_uint32(_camera->control, MMAL_PARAMETER_ISO, _iso) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set ISO parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set ISO parameter.\n";
     }
 }
 
@@ -1149,7 +1134,7 @@ void Private_Impl_Still::commitSharpness(void)
 {
     if (mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_SHARPNESS, (MMAL_RATIONAL_T) {_sharpness, 100}) != MMAL_SUCCESS )
     {
-        std::cerr << API_NAME << ": Failed to set sharpness parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set sharpness parameter.\n";
     }
 }
 
@@ -1161,7 +1146,7 @@ void Private_Impl_Still::commitContrast(void)
 {
     if (mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_CONTRAST, (MMAL_RATIONAL_T) {_contrast, 100}) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set contrast parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set contrast parameter.\n";
     }
 }
 
@@ -1173,7 +1158,7 @@ void Private_Impl_Still::commitSaturation(void)
 {
     if (mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_SATURATION, (MMAL_RATIONAL_T) {_saturation, 100}) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set saturation parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set saturation parameter.\n";
     }
 }
 
@@ -1187,7 +1172,7 @@ void Private_Impl_Still::commitExposure(void)
 
     if (mmal_port_parameter_set(_camera->control, &exp_mode.hdr) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set exposure parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set exposure parameter.\n";
     }
 }
 
@@ -1201,7 +1186,7 @@ void Private_Impl_Still::commitAWB(void)
 
     if (mmal_port_parameter_set(_camera->control, &param.hdr) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set AWB parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set AWB parameter.\n";
     }
 }
 
@@ -1215,7 +1200,7 @@ void Private_Impl_Still::commitImageEffect(void)
 
     if (mmal_port_parameter_set(_camera->control, &image_fx.hdr) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set image effect parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set image effect parameter.\n";
     }
 }
 
@@ -1229,7 +1214,7 @@ void Private_Impl_Still::commitMetering(void)
 
     if (mmal_port_parameter_set(_camera->control, &meter_mode.hdr) != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set metering parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set metering parameter.\n";
     }
 }
 
@@ -1249,7 +1234,7 @@ void Private_Impl_Still::commitFlips(void)
          (mmal_port_parameter_set(_camera->output[1], &mirror.hdr) != MMAL_SUCCESS) ||
          (mmal_port_parameter_set(_camera->output[2], &mirror.hdr)                )   )
     {
-        std::cerr << API_NAME << ": Failed to set horizontal/vertical flip parameter." << std::endl;
+        std::cerr << API_NAME << ": Failed to set horizontal/vertical flip parameter.\n";
     }
 }
 
@@ -1378,7 +1363,7 @@ std::string Private_Impl_Still::getId(void) const
 
     if (!file)
     {
-        std::cerr << __FILE__ << " " << __LINE__ << ":" << __func__ << "Could not read /proc/cpuinfo" << std::endl;
+        std::cerr << __FILE__ << " " << __LINE__ << ":" << __func__ << "Could not read /proc/cpuinfo\n";
         return serial;
     }
 
@@ -1397,7 +1382,7 @@ std::string Private_Impl_Still::getId(void) const
         {
             if (sscanf(line,"%s : %s", aux, serial) != 2)
             {
-                std::cerr << __FILE__ << " " << __LINE__ << ":" << __func__ << "Error parsing /proc/cpuinfo" << std::endl;
+                std::cerr << __FILE__ << " " << __LINE__ << ":" << __func__ << "Error parsing /proc/cpuinfo\n";
             }
             else
             {

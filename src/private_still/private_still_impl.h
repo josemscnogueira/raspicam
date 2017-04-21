@@ -75,6 +75,8 @@ namespace raspicam
             bool                                 _is_initialized;
             std::string                          _camera_name;
 
+            bool                                 _raw_mode;
+
                 // MMAL Attributes
             MMAL_COMPONENT_T*                    _camera;             // Pointer to the camera component
             MMAL_COMPONENT_T*                    _encoder;            // Pointer to the encoder component
