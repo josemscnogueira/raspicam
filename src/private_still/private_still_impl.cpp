@@ -37,10 +37,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "private_still_impl.h"
 
-#include "mmal/mmal_buffer.h"
-#include "mmal/util/mmal_default_components.h"
-#include "mmal/util/mmal_util.h"
-#include "mmal/util/mmal_util_params.h"
+#include "interfaces/mmal/mmal_buffer.h"
+#include "interfaces/mmal/util/mmal_default_components.h"
+#include "interfaces/mmal/util/mmal_util.h"
+#include "interfaces/mmal/util/mmal_util_params.h"
 
 #include <fstream>
 #include <iostream>
@@ -72,14 +72,40 @@ typedef struct
 /**
  * Camera callbacks
  */
-static void control_callback(MMAL_PORT_T*          port  ,
-                             MMAL_BUFFER_HEADER_T* buffer)
+static void camera_control_callback(MMAL_PORT_T*          port  ,
+                                    MMAL_BUFFER_HEADER_T* buffer)
 {
-    if (buffer->cmd == MMAL_EVENT_PARAMETER_CHANGED ) { }
-    else                                              { /* Unexpected control callback event!*/ }
+    if (buffer->cmd == MMAL_EVENT_PARAMETER_CHANGED)
+    {
+        MMAL_EVENT_PARAMETER_CHANGED_T* param = (MMAL_EVENT_PARAMETER_CHANGED_T*) buffer->data;
 
-    mmal_buffer_header_release(buffer);
+        switch (param->hdr.id)
+        {
+            case MMAL_PARAMETER_CAMERA_SETTINGS:
+            {
+                MMAL_PARAMETER_CAMERA_SETTINGS_T* settings = (MMAL_PARAMETER_CAMERA_SETTINGS_T*) param;
+
+                std::cerr << "Exposure now "   << settings->exposure
+                          << ", analog gain "  << settings->analog_gain.num  << "/" << settings->analog_gain.den
+                          << ", digital gain " << settings->digital_gain.num << "/" << settings->digital_gain.den << '\n';
+
+                std::cerr << "AWB R=" << settings->awb_red_gain.num   << "/" << settings->awb_red_gain.den
+                          <<    " B=" << settings->awb_blue_gain.num  << "/" << settings->awb_blue_gain.den << '\n';
+                break;
+            }
+        }
+    }
+    else if (buffer->cmd == MMAL_EVENT_ERROR)
+    {
+        std::cerr << "No data received from sensor. Check all connections, including the Sunny one on the camera board.\n";
+    }
+    else
+    {
+        std::cerr << "Received unexpected camera control callback event, " << buffer->cmd << '\n';
+    }
 }
+
+
 /**
  * Camera callbacks
  */
@@ -162,47 +188,122 @@ const std::string Private_Impl_Still::API_NAME = "PRIVATE_IMPL_RaspiCamStill";
  */
 Private_Impl_Still::Private_Impl_Still(void)
 {
-    this->setDefaults();
-
+    // Camera initialized flag
     _is_initialized      = false;
+    _camera_name         = "";
+
+    // MMAL Components pointers
     _camera              = NULL;
     _encoder             = NULL;
+
+    // MMAL Connection pointers
     _encoder_connection  = NULL;
+
+    // MMAL Pool pointers
     _encoder_pool        = NULL;
+
+    // MMAL ports pointers
     _port_camera         = NULL;
     _port_encoder_input  = NULL;
     _port_encoder_output = NULL;
+
+    this->setDefaults();
 }
+
+/**
+ *
+ */
+void Private_Impl_Still::getSensorInfo(void)
+{
+    MMAL_COMPONENT_T*   camera_info;
+    MMAL_STATUS_T       status;
+
+    status = mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA_INFO, &camera_info);
+    if (status == MMAL_SUCCESS)
+    {
+        // Deliberately undersize to check firmware veresion
+        MMAL_PARAMETER_CAMERA_INFO_T camera_info_param;
+                                     camera_info_param.hdr.id   = MMAL_PARAMETER_CAMERA_INFO;
+                                     camera_info_param.hdr.size = sizeof(camera_info_param)-4;
+
+        status = mmal_port_parameter_get(camera_info->control, &camera_info_param.hdr);
+
+        // Checks with newer firmware versions
+        if (status != MMAL_SUCCESS)
+        {
+            // Running on newer firmware
+            camera_info_param.hdr.size = sizeof(camera_info_param);
+
+            status = mmal_port_parameter_get(camera_info->control, &camera_info_param.hdr);
+            if ( (status == MMAL_SUCCESS) && (camera_info_param.num_cameras > uint(_camera_idx)) )
+            {
+                // Restore to maxiumum resolution
+                if ( (_width  == 0) ||
+                     (_height == 0)   )
+                {
+                    _width  = camera_info_param.cameras[_camera_idx].max_width;
+                    _height = camera_info_param.cameras[_camera_idx].max_height;
+
+                }
+
+                // Restore camera name
+                _camera_name = camera_info_param.cameras[_camera_idx].camera_name;
+                _camera_name.resize(MMAL_PARAMETER_CAMERA_INFO_MAX_STR_LEN);
+            }
+        }
+    }
+
+    // Failed to get sensor information, assume Sony IMX219
+    if ( (_width  == 0) ||
+         (_height == 0)   )
+    {
+        _width  = 3280;
+        _height = 2464;
+    }
+}
+
+
 
 /**
  *
  */
 void Private_Impl_Still::setDefaults(void)
 {
-    _encoder            = NULL;
-    _encoder_connection = NULL;
+    _width                 = 0;
+    _height                = 0;
+    _rotation              = 0;
+    _brightness            = 50;
+    _quality               = 85;
+    _iso                   = 100;
+    _sharpness             = 0;
+    _contrast              = 0;
+    _saturation            = 0;
+    _video_stabilization   = 0;
 
-    _encoding           = RASPICAM_ENCODING_BMP;
-    _width              = 640;
-    _height             = 480;
-    _sharpness          = 0;
-    _contrast           = 0;
-    _brightness         = 50;
-    _quality            = 85;
-    _saturation         = 0;
-    _iso                = 400;
+    _sensor_mode           = 0;
+    _camera_idx            = 0;
 
-    _exposure           = RASPICAM_EXPOSURE_AUTO;
-    _metering           = RASPICAM_METERING_AVERAGE;
-    _awb                = RASPICAM_AWB_AUTO;
-    _image_effect       = RASPICAM_IMAGE_EFFECT_NONE;
-    _rotation           = 0;
+    _exposure_mode         = RASPICAM_EXPOSURE_AUTO;
+    _exposure_compensation = 0;
+    _exposure_metering     = RASPICAM_METERING_AVERAGE;
+    _shutter_speed         = 0;
 
-    _settings_changed   = true;
+    _awb                   = RASPICAM_AWB_AUTO;
+    _awb_gains_r           = 1.0;
+    _awb_gains_b           = 1.0;
 
-    _flip_horizontal    = false;
-    _flip_vertical      = false;
+    _flip_horizontal       = false;
+    _flip_vertical         = false;
+
+    _encoding              = RASPICAM_ENCODING_JPEG;
+	_image_fx              = RASPICAM_IMAGE_EFFECT_NONE;
+
+    // Get sensor information (resolution and name)
+    this->getSensorInfo();
+
+    _settings_changed      = true;
 }
+
 
 
 /**
@@ -261,7 +362,7 @@ void Private_Impl_Still::commitParameters(void)
     // Set encoder encoding
     if (_port_encoder_output != NULL)
     {
-        _port_encoder_output->format->encoding = convertEncoding(_encoding);
+        _port_encoder_output->format->encoding = this->convertEncoding(_encoding);
 
         mmal_port_format_commit(_port_encoder_output);
     }
@@ -280,8 +381,7 @@ MMAL_STATUS_T Private_Impl_Still::connectPorts(MMAL_PORT_T*        port_output,
     MMAL_STATUS_T status = mmal_connection_create(connection                                 ,
                                                   port_output                                ,
                                                   port_input                                 ,
-                                                  (MMAL_CONNECTION_FLAG_TUNNELLING          |
-                                                   MMAL_CONNECTION_FLAG_ALLOCATION_ON_INPUT) );
+                                                  (MMAL_CONNECTION_FLAG_TUNNELLING | MMAL_CONNECTION_FLAG_ALLOCATION_ON_INPUT) );
     if (status == MMAL_SUCCESS)
     {
         status = mmal_connection_enable(*connection);
@@ -296,66 +396,104 @@ MMAL_STATUS_T Private_Impl_Still::connectPorts(MMAL_PORT_T*        port_output,
 /**
  *
  */
-MMAL_STATUS_T Private_Impl_Still::disconnectPorts(MMAL_CONNECTION_T** connection)
-{
-    return mmal_connection_destroy(*connection);
-}
-
-
-/**
- *
- */
 int Private_Impl_Still::createCamera(void)
 {
-    if (mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA, &_camera))
+    // Create camera component
+    MMAL_STATUS_T status = mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA, &_camera);
+
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to create camera component." << std::endl;
+        std::cerr << API_NAME << ": Failed to create camera component.\n";
         this->destroyCamera();
         return -1;
     }
 
-    if (_camera->output_num <= 0)
+    // Select camera
+    MMAL_PARAMETER_INT32_T camera_idx = { {MMAL_PARAMETER_CAMERA_NUM, sizeof(camera_idx)}, _camera_idx};
+
+    status = mmal_port_parameter_set(_camera->control, &camera_idx.hdr);
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Camera does not have output ports!" << std::endl;
+        std::cerr << API_NAME << ": Failed to select camera.\n";
         this->destroyCamera();
         return -1;
     }
+
+    // Verify output ports
+    if (!_camera->output_num)
+    {
+        std::cerr << API_NAME << ": Camera doesn't have output ports.\n";
+        this->destroyCamera();
+        return -1;
+    }
+
+    // Configure sensor mode
+    status = mmal_port_parameter_set_uint32(_camera->control, MMAL_PARAMETER_CAMERA_CUSTOM_SENSOR_CONFIG, _sensor_mode);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Could not set sensor mode.\n";
+        this->destroyCamera();
+        return -1;
+    }
+
+    // Define camera port
+    _port_camera = _camera->output[MMAL_CAMERA_CAPTURE_PORT];
 
     // Enable the camera, and tell it its control callback function
-    if (mmal_port_enable(_camera->control, control_callback))
+    status = mmal_port_enable(_camera->control, camera_control_callback);
+
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Could not enable control port." << std::endl;
+        std::cerr << API_NAME << ": Unable to enable control port.\n";
         this->destroyCamera();
         return -1;
     }
 
-    MMAL_PARAMETER_CAMERA_CONFIG_T cfg_camera = { {MMAL_PARAMETER_CAMERA_CONFIG, sizeof(cfg_camera)},
-                                                  _width                             , // max_stills_w
-                                                  _height                            , // max_stills_h
-                                                  0                                  , // stills_yuv422
-                                                  1                                  , // one_shot_stills
-                                                  _width                             , // max_preview_video_w
-                                                  _height                            , // max_preview_video_h
-                                                  3                                  , // num_preview_video_frames
-                                                  0                                  , // stills_capture_circular_buffer_height
-                                                  0                                  , // fast_preview_resume
-                                                  MMAL_PARAM_TIMESTAMP_MODE_RESET_STC}; // use_stc_timestamp
-
-    // Configure camera
-    if (mmal_port_parameter_set(_camera->control, &cfg_camera.hdr) != MMAL_SUCCESS)
+    // Setup the camera configuration
     {
-        std::cerr << API_NAME << ": Could not set port parameters." << std::endl;
+        MMAL_PARAMETER_CAMERA_CONFIG_T cfg_camera =
+        {
+            {MMAL_PARAMETER_CAMERA_CONFIG, sizeof(cfg_camera)},
+            .max_stills_w                          = _width,
+            .max_stills_h                          = _height,
+            .stills_yuv422                         = 0,
+            .one_shot_stills                       = 1,
+            .max_preview_video_w                   = _width,
+            .max_preview_video_h                   = _height,
+            .num_preview_video_frames              = 3,
+            .stills_capture_circular_buffer_height = 0,
+            .fast_preview_resume                   = 0,
+            .use_stc_timestamp                     = MMAL_PARAM_TIMESTAMP_MODE_RESET_STC
+        };
+
+        mmal_port_parameter_set(_camera->control, &cfg_camera.hdr);
     }
 
     // Commit configuration parameters
     this->commitParameters();
 
-    _port_camera = _camera->output[MMAL_CAMERA_CAPTURE_PORT];
 
+    // Change fps range if necessary, according to shutter_speed // FIXME
+    if (_shutter_speed > 6e6)
+    {
+        MMAL_PARAMETER_FPS_RANGE_T fps_range = { {MMAL_PARAMETER_FPS_RANGE, sizeof(fps_range)},
+                                                 { 50, 1000}                                  ,
+                                                 {166, 1000}                                  };
+        mmal_port_parameter_set(_port_camera, &fps_range.hdr);
+    }
+    else if (_shutter_speed > 1e6)
+    {
+        MMAL_PARAMETER_FPS_RANGE_T fps_range = { {MMAL_PARAMETER_FPS_RANGE, sizeof(fps_range)},
+                                                 {167, 1000}                                  ,
+                                                 {999, 1000}                                  };
+        mmal_port_parameter_set(_port_camera, &fps_range.hdr);
+    }
+
+    // Set format for camera port
     MMAL_ES_FORMAT_T* format = _port_camera->format;
                       format->encoding                 = MMAL_ENCODING_OPAQUE;
-                      format->es->video.width          = _width;
-                      format->es->video.height         = _height;
+                      format->es->video.width          = VCOS_ALIGN_UP( _width,32);
+                      format->es->video.height         = VCOS_ALIGN_UP(_height,16);
                       format->es->video.crop.x         = 0;
                       format->es->video.crop.y         = 0;
                       format->es->video.crop.width     = _width;
@@ -363,35 +501,28 @@ int Private_Impl_Still::createCamera(void)
                       format->es->video.frame_rate.num = STILLS_FRAME_RATE_NUM;
                       format->es->video.frame_rate.den = STILLS_FRAME_RATE_DEN;
 
-    // Determine camera port buffer parameters
-    if (_port_camera->buffer_size < _port_camera->buffer_size_min)
+    status = mmal_port_format_commit(_port_camera);
+    if (status != MMAL_SUCCESS)
     {
-        _port_camera->buffer_size = _port_camera->buffer_size_min;
-    }
-    _port_camera->buffer_num = _port_camera->buffer_num_recommended;
-
-    // Commit format
-    if (mmal_port_format_commit(_port_camera))
-    {
-        std::cerr << API_NAME << ": Camera still format could not be set." << std::endl;
+        std::cerr << API_NAME << ": Camera port format couldn't be set.\n";
         this->destroyCamera();
         return -1;
     }
 
-    // Enable camera
-    if (mmal_component_enable(_camera))
+    /* Ensure there are enough buffers to avoid dropping frames */
+    if (_port_camera->buffer_num < VIDEO_OUTPUT_BUFFERS_NUM)
     {
-        std::cerr << API_NAME << ": Camera component could not be enabled." << std::endl;
+        _port_camera->buffer_num = VIDEO_OUTPUT_BUFFERS_NUM;
+    }
+
+    // Enable camera component
+    status = mmal_component_enable(_camera);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Camera component couldn't be enabled.\n";
         this->destroyCamera();
         return -1;
     }
-
-    // if ( !(_encoder_pool = mmal_port_pool_create(_port_camera, _port_camera->buffer_num, _port_camera->buffer_size)) )
-    // {
-    //     std::cerr << API_NAME << ": Failed to create buffer header pool for camera." << std::endl;
-    //     this->destroyCamera();
-    //     return -1;
-    // }
 
     return 0;
 }
@@ -400,68 +531,118 @@ int Private_Impl_Still::createCamera(void)
 /**
  *
  */
+void Private_Impl_Still::destroyCamera(void)
+{
+    if (_camera) mmal_component_destroy(_camera);
+    _camera = NULL;
+}
+
+
+
+/**
+ *
+ */
 int Private_Impl_Still::createEncoder(void)
 {
+    // Create camera component
+    MMAL_STATUS_T status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &_encoder);
+
     // Create default image encoder
-    if (mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &_encoder))
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Could not create encoder component." << std::endl;
+        std::cerr << API_NAME << ": Could not create encoder component.\n";
         this->destroyEncoder();
         return -1;
     }
 
+    // Verify encoder input and output ports
     if (!_encoder->input_num || !_encoder->output_num)
     {
-        std::cerr << API_NAME << ": Encoder does not have input/output ports." << std::endl;
+        std::cerr << API_NAME << ": Encoder does not have input/output ports.\n";
         this->destroyEncoder();
         return -1;
     }
 
+    // Copy encoder port references
     _port_encoder_input  = _encoder->input[ 0];
     _port_encoder_output = _encoder->output[0];
 
+    // Force encoder ports to have the same format
     mmal_format_copy(_port_encoder_output->format, _port_encoder_input->format);
 
-    // Set output encoding
-    _port_encoder_output->format->encoding = this->convertEncoding(_encoding);
-    _port_encoder_output->buffer_size      = _port_encoder_output->buffer_size_recommended;
+    // Specify output format
+    _port_encoder_output->format->encoding = _encoding;
 
+    // Set buffer size
     if (_port_encoder_output->buffer_size < _port_encoder_output->buffer_size_min)
-    {
         _port_encoder_output->buffer_size = _port_encoder_output->buffer_size_min;
-    }
-    _port_encoder_output->buffer_num = _port_encoder_output->buffer_num_recommended;
+    else
+        _port_encoder_output->buffer_size = _port_encoder_output->buffer_size_recommended;
+
 
     if (_port_encoder_output->buffer_num < _port_encoder_output->buffer_num_min)
-    {
         _port_encoder_output->buffer_num = _port_encoder_output->buffer_num_min;
-    }
+    else
+        _port_encoder_output->buffer_num = _port_encoder_output->buffer_num_recommended;
 
-    // Commit encoder output port
-    if (mmal_port_format_commit(_port_encoder_output))
+    // Commit the port changes to the output port
+    status = mmal_port_format_commit(_port_encoder_output);
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Could not set format on encoder output port." << std::endl;
+        std::cerr << API_NAME << ": Could not set format on encoder output port.\n";
         this->destroyEncoder();
         return -1;
     }
 
-    // Enable encoder
-    if (mmal_component_enable(_encoder))
+    // Set the JPEG quality level
+    status = mmal_port_parameter_set_uint32(_port_encoder_output, MMAL_PARAMETER_JPEG_Q_FACTOR, _quality);
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Could not enable encoder component." << std::endl;
+        std::cerr << API_NAME << ": Unable to set JPEG quality.\n";
         this->destroyEncoder();
         return -1;
     }
 
-    // Create encoder pool
-    if ( !(_encoder_pool = mmal_port_pool_create(_port_encoder_output, _port_encoder_output->buffer_num, _port_encoder_output->buffer_size )) )
+    // Set the JPEG restart interval
+    status = mmal_port_parameter_set_uint32(_port_encoder_output, MMAL_PARAMETER_JPEG_RESTART_INTERVAL, 0);
+
+    // Set up any required thumbnail
     {
-        std::cerr << API_NAME << ": Failed to create buffer header pool for encoder output port." << std::endl;
+        MMAL_PARAMETER_THUMBNAIL_CONFIG_T param_thumb = { {MMAL_PARAMETER_THUMBNAIL_CONFIGURATION, sizeof(param_thumb)},
+                                                           0, 0, 0, 0};
+
+        status = mmal_port_parameter_set(_encoder->control, &param_thumb.hdr);
+    }
+
+    // Enable encoder component
+    status = mmal_component_enable(_encoder);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Unable to enable video encoder component.\n";
+        this->destroyEncoder();
+        return -1;
+    }
+
+    // Create pool of buffer headers for the output port to consume
+    _encoder_pool = mmal_port_pool_create(_port_encoder_output, _port_encoder_output->buffer_num, _port_encoder_output->buffer_size);
+    if (!_encoder_pool)
+    {
+        std::cerr << API_NAME << ": Failed to create buffer header pool for encoder output port.\n";
         this->destroyEncoder();
         return -1;
     }
 
     return 0;
+}
+
+
+/**
+ *
+ */
+void Private_Impl_Still::destroyEncoder(void)
+{
+    if (_encoder) mmal_component_destroy(_encoder);
+    _encoder = NULL;
 }
 
 
@@ -506,66 +687,39 @@ void Private_Impl_Still::disableComponents(void)
 /**
  *
  */
-void Private_Impl_Still::destroyCamera(void)
-{
-    if (_camera) mmal_component_destroy(_camera);
-    _camera = NULL;
-}
-
-/**
- *
- */
-void Private_Impl_Still::destroyEncoder(void)
-{
-    std::cout << "destroyEncoder..." << std::endl;
-
-    if (_encoder)
-    {
-        if (_encoder_pool)
-        {
-            mmal_port_pool_destroy(_encoder->output[0], _encoder_pool);
-        }
-
-        mmal_component_destroy(_encoder);
-
-        _encoder_pool = NULL;
-        _encoder      = NULL;
-    }
-
-    std::cout << "destroyEncoder...DONE" << std::endl;
-}
-
-
-/**
- *
- */
 int Private_Impl_Still::initialize(void)
 {
     if (_is_initialized) return 0;
 
-    if (this->createCamera())
+    // Create camera MMAL structure
+    int status = this->createCamera();
+    if (status != 0)
     {
-        std::cerr << API_NAME << ": Failed to create camera component." << std::endl;
-        this->destroyCamera();
+        std::cerr << API_NAME << ": Failed to create camera component.\n";
         return -1;
     }
-    else if (this->createEncoder())
-    {
-        std::cerr << API_NAME << ": Failed to create encoder component." << std::endl;
-        this->destroyCamera();
-        return -1;
-    }
-    else
-    {
-        _port_camera         = _camera->output[MMAL_CAMERA_CAPTURE_PORT];
-        _port_encoder_input  = _encoder->input[0];
-        _port_encoder_output = _encoder->output[0];
 
-        if (this->connectPorts(_port_camera, _port_encoder_input, &_encoder_connection) != MMAL_SUCCESS)
-        {
-            std::cerr << "ERROR: Could not connect encoder ports!" << std::endl;
-            return -1;
-        }
+    // Create encoder MMAL structure
+    status = this->createEncoder();
+    if (status != 0)
+    {
+        std::cerr << API_NAME << ": Failed to create encoder component.\n";
+        this->destroyCamera();
+        return -1;
+    }
+
+    // Refresh port referenecs
+    _port_camera         = _camera->output[MMAL_CAMERA_CAPTURE_PORT];
+    _port_encoder_input  = _encoder->input[0];
+    _port_encoder_output = _encoder->output[0];
+
+    // Connect encoder ports
+    status = this->connectPorts(_port_camera, _port_encoder_input, &_encoder_connection);
+    if (status != 0)
+    {
+        std::cerr << API_NAME << ": Failed to connect camera port to encoder input.\n";
+        this->release();
+        return -1;
     }
 
     _is_initialized = true;
@@ -582,41 +736,29 @@ int Private_Impl_Still::release(void)
 
     // Disable all our ports that are not handled by connections
     if (_port_encoder_output && _port_encoder_output->is_enabled) mmal_port_disable(_port_encoder_output);
-    std::cout << "release() | camera port disabled" << std::endl;
+    std::cout << "release() | camera port disabled\n";
 
     // Destroy encoder connection
     if (_encoder_connection) mmal_connection_destroy(_encoder_connection);
-    _encoder_connection = NULL;
-    std::cout << "release() | encoder connection destroyed" << std::endl;
+    std::cout << "release() | encoder connection destroyed\n";
 
     if (_encoder) mmal_component_disable(_encoder);
-    std::cout << "release() | encoder component disabled" << std::endl;
+    std::cout << "release() | encoder component disabled\n";
 
     if (_camera) mmal_component_disable(_camera);
-    std::cout << "release() | camera component disabled" << std::endl;
+    std::cout << "release() | camera component disabled\n";
 
     // Get rid of any port buffers first
     if (_encoder_pool) mmal_port_pool_destroy(_encoder->output[0], _encoder_pool);
-    _encoder_pool = NULL;
-    std::cout << "release() | encoder pool destroyed" << std::endl;
+    std::cout << "release() | encoder pool destroyed\n";
 
     if (_encoder) mmal_component_destroy(_encoder);
     _encoder = NULL;
-    std::cout << "release() | encoder component destroyed" << std::endl;
+    std::cout << "release() | encoder component destroyed\n";
 
     if (_camera) mmal_component_destroy(_camera);
     _camera = NULL;
-    std::cout << "release() | camera component destroyed" << std::endl;
-
-    // if (this->disconnectPorts(&_encoder_connection) != MMAL_SUCCESS)
-    // {
-    //     std::cerr << "ERROR: Could not disconnect encoder ports!" << std::endl;
-    // }
-    //
-    // this->disablePorts();
-    // this->disableComponents();
-    // this->destroyEncoder();
-    // this->destroyCamera();
+    std::cout << "release() | camera component destroyed\n";
 
     _is_initialized = false;
     return 0;
@@ -890,7 +1032,7 @@ void Private_Impl_Still::setEncoding(const RASPICAM_ENCODING encoding)
  */
 void Private_Impl_Still::setExposure(const RASPICAM_EXPOSURE exposure)
 {
-    _exposure         = exposure;
+    _exposure_mode    = exposure;
     _settings_changed = true;
 }
 
@@ -910,7 +1052,8 @@ void Private_Impl_Still::setAWB(const RASPICAM_AWB awb)
  */
 void Private_Impl_Still::setImageEffect(const RASPICAM_IMAGE_EFFECT image_fx)
 {
-    _image_effect     = image_fx;
+    _image_fx         = image_fx;
+	_image_fx         = RASPICAM_IMAGE_EFFECT_NONE;
     _settings_changed = true;
 }
 
@@ -920,8 +1063,8 @@ void Private_Impl_Still::setImageEffect(const RASPICAM_IMAGE_EFFECT image_fx)
  */
 void Private_Impl_Still::setMetering(const RASPICAM_METERING metering)
 {
-    _metering = metering;
-    _settings_changed = true;
+    _exposure_metering = metering;
+    _settings_changed  = true;
 }
 
 
@@ -1040,7 +1183,7 @@ void Private_Impl_Still::commitSaturation(void)
  */
 void Private_Impl_Still::commitExposure(void)
 {
-    MMAL_PARAMETER_EXPOSUREMODE_T exp_mode = { {MMAL_PARAMETER_EXPOSURE_MODE,sizeof(exp_mode)}, this->convertExposure(_exposure) };
+    MMAL_PARAMETER_EXPOSUREMODE_T exp_mode = { {MMAL_PARAMETER_EXPOSURE_MODE,sizeof(exp_mode)}, this->convertExposure(_exposure_mode) };
 
     if (mmal_port_parameter_set(_camera->control, &exp_mode.hdr) != MMAL_SUCCESS)
     {
@@ -1068,7 +1211,7 @@ void Private_Impl_Still::commitAWB(void)
  */
 void Private_Impl_Still::commitImageEffect(void)
 {
-    MMAL_PARAMETER_IMAGEFX_T image_fx = { {MMAL_PARAMETER_IMAGE_EFFECT,sizeof(image_fx)}, this->convertImageEffect(_image_effect) };
+    MMAL_PARAMETER_IMAGEFX_T image_fx = { {MMAL_PARAMETER_IMAGE_EFFECT,sizeof(image_fx)}, this->convertImageEffect(_image_fx) };
 
     if (mmal_port_parameter_set(_camera->control, &image_fx.hdr) != MMAL_SUCCESS)
     {
@@ -1082,7 +1225,7 @@ void Private_Impl_Still::commitImageEffect(void)
  */
 void Private_Impl_Still::commitMetering(void)
 {
-    MMAL_PARAMETER_EXPOSUREMETERINGMODE_T meter_mode = { {MMAL_PARAMETER_EXP_METERING_MODE, sizeof(meter_mode)}, this->convertMetering(_metering) };
+    MMAL_PARAMETER_EXPOSUREMETERINGMODE_T meter_mode = { {MMAL_PARAMETER_EXP_METERING_MODE, sizeof(meter_mode)}, this->convertMetering(_exposure_metering) };
 
     if (mmal_port_parameter_set(_camera->control, &meter_mode.hdr) != MMAL_SUCCESS)
     {

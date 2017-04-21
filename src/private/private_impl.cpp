@@ -38,9 +38,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "private_impl.h"
 #include <iostream>
 #include <cstdio>
-#include "mmal/util/mmal_util.h"
-#include "mmal/util/mmal_util_params.h"
-#include "mmal/util/mmal_default_components.h"
+#include "interfaces/mmal/util/mmal_util.h"
+#include "interfaces/mmal/util/mmal_util_params.h"
+#include "interfaces/mmal/util/mmal_default_components.h"
 using namespace std;
 namespace raspicam {
     namespace _private{
@@ -252,10 +252,10 @@ namespace raspicam {
             }
 
             video_port = camera->output[MMAL_CAMERA_VIDEO_PORT];
-        
+
             //set sensor mode
-            if ( state->sensor_mode != 0 && mmal_port_parameter_set_uint32 ( camera->control, 
-                                                    MMAL_PARAMETER_CAMERA_CUSTOM_SENSOR_CONFIG, 
+            if ( state->sensor_mode != 0 && mmal_port_parameter_set_uint32 ( camera->control,
+                                                    MMAL_PARAMETER_CAMERA_CUSTOM_SENSOR_CONFIG,
                                                     state->sensor_mode)  != MMAL_SUCCESS)
             {
                 cerr << __func__ << ": Failed to set sensmode.";
@@ -877,4 +877,3 @@ namespace raspicam {
         }
     };
 };
-

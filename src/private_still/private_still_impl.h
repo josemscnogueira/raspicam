@@ -42,8 +42,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  * Include files
  */
 #include "raspicamtypes.h"
-#include "mmal/mmal.h"
-#include "mmal/util/mmal_connection.h"
+#include "interfaces/mmal/mmal.h"
+#include "interfaces/mmal/util/mmal_connection.h"
 
 #include <string>
 
@@ -54,6 +54,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define MMAL_CAMERA_CAPTURE_PORT 2
 #define STILLS_FRAME_RATE_NUM    3
 #define STILLS_FRAME_RATE_DEN    1
+#define VIDEO_OUTPUT_BUFFERS_NUM 3
 
 namespace raspicam
 {
@@ -72,6 +73,8 @@ namespace raspicam
         private:
             // Attributes
             bool                                 _is_initialized;
+            std::string                          _camera_name;
+
                 // MMAL Attributes
             MMAL_COMPONENT_T*                    _camera;             // Pointer to the camera component
             MMAL_COMPONENT_T*                    _encoder;            // Pointer to the encoder component
@@ -83,7 +86,7 @@ namespace raspicam
             MMAL_PORT_T*                         _port_camera;
             MMAL_PORT_T*                         _port_encoder_input;
             MMAL_PORT_T*                         _port_encoder_output;
-                // Image attributes
+                // Camera+Sensor Settings
             uint                                 _width;
             uint                                 _height;
             uint                                 _rotation;           // 0 to 359
@@ -93,16 +96,28 @@ namespace raspicam
             int                                  _sharpness;          // -100 to 100
             int                                  _contrast;           // -100 to 100
             int                                  _saturation;         // -100 to 100
-                // Image GPU Processing attributes
-            RASPICAM_ENCODING                    _encoding;
-            RASPICAM_EXPOSURE                    _exposure;
+            int                                  _video_stabilization;
+
+            int                                  _camera_idx;         // Only compute module supports idx > 0
+            int                                  _sensor_mode;
+
+            RASPICAM_EXPOSURE                    _exposure_mode;
+            int                                  _exposure_compensation;
+            RASPICAM_METERING                    _exposure_metering;
+            int                                  _shutter_speed;
+
             RASPICAM_AWB                         _awb;
-            RASPICAM_IMAGE_EFFECT                _image_effect;
-            RASPICAM_METERING                    _metering;
-                // Other settings attibutes
-            bool                                 _settings_changed;
+            float                                _awb_gains_r;
+            float                                _awb_gains_b;
+            // MMAL_PARAM_IMAGEFX_T                 _image_fx; // TODO REMOVE
+
             bool                                 _flip_horizontal;
             bool                                 _flip_vertical;
+
+            RASPICAM_ENCODING                    _encoding;
+			RASPICAM_IMAGE_EFFECT                _image_fx;
+                // Other atributes
+            bool                                 _settings_changed;
 
             // Methods
                 // MMAL methods
@@ -125,6 +140,8 @@ namespace raspicam
             void                              commitMetering(    void);
             void                              commitFlips(       void);
                 // Camera interface
+            void                              getSensorInfo(     void);
+
             int                               startCapture(      void);
             int                               createCamera(      void);
             int                               createEncoder(     void);
@@ -133,10 +150,9 @@ namespace raspicam
             void                              destroyEncoder(    void);
             void                              disablePorts(      void);
             void                              setDefaults(       void);
-            MMAL_STATUS_T                     connectPorts(      MMAL_PORT_T*          port_output,
+            static MMAL_STATUS_T              connectPorts(      MMAL_PORT_T*          port_output,
                                                                  MMAL_PORT_T*          port_input ,
                                                                  MMAL_CONNECTION_T**   connection );
-            MMAL_STATUS_T                     disconnectPorts(   MMAL_CONNECTION_T**   connection );
 
         public:
             static const std::string API_NAME;
@@ -149,6 +165,7 @@ namespace raspicam
 
             int    initialize(        void);
             int    release(           void);
+
             int    startCapture(      imageTakenCallback          callback_user    ,
                                       uchar*                      data_preallocated,
                                       uint                        offset           ,
@@ -160,6 +177,8 @@ namespace raspicam
             size_t getImageBufferSize(void) const;
             void   bufferCallback(    MMAL_PORT_T*                port  ,
                                       MMAL_BUFFER_HEADER_T*       buffer);
+
+            // Setters
             void   commitParameters(  void);
             void   setWidth(          const uint                  width             );
             void   setHeight(         const uint                  height            );
@@ -189,10 +208,10 @@ namespace raspicam
             int                   getContrast(          void) const {return _contrast;       };
             int                   getSaturation(        void) const {return _saturation;     };
             RASPICAM_ENCODING     getEncoding(          void) const {return _encoding;       };
-            RASPICAM_EXPOSURE     getExposure(          void) const {return _exposure;       };
+            RASPICAM_EXPOSURE     getExposure(          void) const {return _exposure_mode;  };
             RASPICAM_AWB          getAWB(               void) const {return _awb;            };
-            RASPICAM_IMAGE_EFFECT getImageEffect(       void) const {return _image_effect;   };
-            RASPICAM_METERING     getMetering(          void) const {return _metering;       };
+            RASPICAM_IMAGE_EFFECT getImageEffect(       void) const {return _image_fx;       };
+            RASPICAM_METERING     getMetering(          void) const {return _exposure_metering; };
             bool                  isHorizontallyFlipped(void) const {return _flip_horizontal;};
             bool                  isVerticallyFlipped(  void) const {return _flip_vertical;  };
 
@@ -200,9 +219,7 @@ namespace raspicam
             //Returns an id of the camera. We assume the camera id is the one of the raspberry
             //the id is obtained using raspberry serial number obtained in /proc/cpuinfo
             std::string getId() const;
-
         };
-
     }
 }
 #endif // RASPICAM_H

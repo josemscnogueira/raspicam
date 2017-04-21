@@ -37,12 +37,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #ifndef _Private_RaspiCam_IMPL_H
 #define _Private_RaspiCam_IMPL_H
-#include "mmal/mmal.h"
+#include "interfaces/mmal/mmal.h"
 //#include "mmal_connection.h"
 #include <mutex>
 #include <string>
 #include "raspicamtypes.h"
-#include "private_types.h" 
+#include "private_types.h"
 #include "threadcondition.h"
 namespace raspicam {
     namespace _private
@@ -292,5 +292,3 @@ namespace raspicam {
 };
 
 #endif
-
-

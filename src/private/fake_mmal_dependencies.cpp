@@ -1,8 +1,8 @@
-#include "mmal/util/mmal_default_components.h"
-#include "mmal/util/mmal_util.h"
-#include "mmal/util/mmal_util_params.h"
-#include "mmal/mmal.h"
-#include "mmal/util/mmal_connection.h"
+#include "interfaces/mmal/util/mmal_default_components.h"
+#include "interfaces/mmal/util/mmal_util.h"
+#include "interfaces/mmal/util/mmal_util_params.h"
+#include "interfaces/mmal/mmal.h"
+#include "interfaces/mmal/util/mmal_connection.h"
 
 #define UNUSED(x) ((void)x)
 
