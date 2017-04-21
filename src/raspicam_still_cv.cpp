@@ -181,5 +181,3 @@ namespace raspicam {
         return _impl->getId();
     }
 }
-
-

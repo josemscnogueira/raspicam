@@ -37,129 +37,164 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #ifndef _Private_RaspiCam_STILL_IMPL_H
 #define _Private_RaspiCam_STILL_IMPL_H
+
+/**
+ * Include files
+ */
 #include "raspicamtypes.h"
 #include "mmal/mmal.h"
 #include "mmal/util/mmal_connection.h"
+
 #include <string>
+
+
+/**
+ * Defines
+ */
 #define MMAL_CAMERA_CAPTURE_PORT 2
-#define STILLS_FRAME_RATE_NUM 3
-#define STILLS_FRAME_RATE_DEN 1
-namespace raspicam {
+#define STILLS_FRAME_RATE_NUM    3
+#define STILLS_FRAME_RATE_DEN    1
+
+namespace raspicam
+{
     namespace _private
     {
-        typedef void ( *imageTakenCallback ) ( unsigned char * data, unsigned int image_offset, unsigned int length );
+        /**
+         * Typedefs
+         */
+        typedef unsigned char uchar;
+        typedef unsigned int  uint;
 
-        class Private_Impl_Still {
+        typedef void (*imageTakenCallback) (uchar* data, uint image_offset, uint length);
 
-            private:
+        class Private_Impl_Still
+        {
+        private:
+            // Attributes
+            bool                                 _is_initialized;
+                // MMAL Attributes
+            MMAL_COMPONENT_T*                    _camera;             // Pointer to the camera component
+            MMAL_COMPONENT_T*                    _encoder;            // Pointer to the encoder component
 
-            MMAL_COMPONENT_T * camera;	 /// Pointer to the camera component
-            MMAL_COMPONENT_T * encoder;	/// Pointer to the encoder component
-            MMAL_CONNECTION_T * encoder_connection; // Connection from the camera to the encoder
-            MMAL_POOL_T * encoder_pool;				  /// Pointer to the pool of buffers used by encoder output port
-            MMAL_PORT_T * camera_still_port;
-            MMAL_PORT_T * encoder_input_port;
-            MMAL_PORT_T * encoder_output_port;
-            unsigned int width;
-            unsigned int height;
-            unsigned int rotation; // 0 to 359
-            unsigned int brightness; // 0 to 100
-            unsigned int quality; // 0 to 100
-            int iso;
-            int sharpness; // -100 to 100
-            int contrast; // -100 to 100
-            int saturation; // -100 to 100
-            RASPICAM_ENCODING encoding;
-            RASPICAM_EXPOSURE exposure;
-            RASPICAM_AWB awb;
-            RASPICAM_IMAGE_EFFECT imageEffect;
-            RASPICAM_METERING metering;
-            bool changedSettings;
-            bool horizontalFlip;
-            bool verticalFlip;
+            MMAL_CONNECTION_T*                   _encoder_connection; // Connection from the camera to the encoder
 
-            MMAL_FOURCC_T convertEncoding ( RASPICAM_ENCODING encoding );
-            MMAL_PARAM_EXPOSUREMETERINGMODE_T convertMetering ( RASPICAM_METERING metering );
-            MMAL_PARAM_EXPOSUREMODE_T convertExposure ( RASPICAM_EXPOSURE exposure );
-            MMAL_PARAM_AWBMODE_T convertAWB ( RASPICAM_AWB awb );
-            MMAL_PARAM_IMAGEFX_T convertImageEffect ( RASPICAM_IMAGE_EFFECT imageEffect );
-            void commitBrightness();
-            void commitQuality();
-            void commitRotation();
-            void commitISO();
-            void commitSharpness();
-            void commitContrast();
-            void commitSaturation();
-            void commitExposure();
-            void commitAWB();
-            void commitImageEffect();
-            void commitMetering();
-            void commitFlips();
-            int startCapture();
-            int createCamera();
-            int createEncoder();
-            void destroyCamera();
-            void destroyEncoder();
-            void setDefaults();
-            MMAL_STATUS_T connectPorts ( MMAL_PORT_T *output_port, MMAL_PORT_T *input_port, MMAL_CONNECTION_T **connection );
+            MMAL_POOL_T*                         _encoder_pool;       // Pointer to the pool of buffers used by encoder output port
 
-	    bool _isInitialized;
-            public:
-            const char * API_NAME;
-            Private_Impl_Still() {
-                API_NAME = "Private_Impl_Still";
-                setDefaults();
-                camera = NULL;
-                encoder = NULL;
-                encoder_connection = NULL;
-                encoder_pool = NULL;
-                camera_still_port = NULL;
-                encoder_input_port = NULL;
-                encoder_output_port = NULL;
-		_isInitialized=false;
-            }
-            int initialize();
-            int startCapture ( imageTakenCallback userCallback, unsigned char * preallocated_data, unsigned int offset, unsigned int length );
-            void stopCapture();
-            bool takePicture ( unsigned char * preallocated_data, unsigned int length );
-	    
-	        size_t getImageBufferSize() const;
-            void bufferCallback ( MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer );
-            void commitParameters();
-            void setWidth ( unsigned int width );
-            void setHeight ( unsigned int height );
-            void setCaptureSize ( unsigned int width, unsigned int height );
-            void setBrightness ( unsigned int brightness );
-            void setQuality ( unsigned int quality );
-            void setRotation ( int rotation );
-            void setISO ( int iso );
-            void setSharpness ( int sharpness );
-            void setContrast ( int contrast );
-            void setSaturation ( int saturation );
-            void setEncoding ( RASPICAM_ENCODING encoding );
-            void setExposure ( RASPICAM_EXPOSURE exposure );
-            void setAWB ( RASPICAM_AWB awb );
-            void setImageEffect ( RASPICAM_IMAGE_EFFECT imageEffect );
-            void setMetering ( RASPICAM_METERING metering );
-            void setHorizontalFlip ( bool hFlip );
-            void setVerticalFlip ( bool vFlip );
+            MMAL_PORT_T*                         _port_camera;
+            MMAL_PORT_T*                         _port_encoder_input;
+            MMAL_PORT_T*                         _port_encoder_output;
+                // Image attributes
+            uint                                 _width;
+            uint                                 _height;
+            uint                                 _rotation;           // 0 to 359
+            uint                                 _brightness;         // 0 to 100
+            uint                                 _quality;            // 0 to 100
+            int                                  _iso;
+            int                                  _sharpness;          // -100 to 100
+            int                                  _contrast;           // -100 to 100
+            int                                  _saturation;         // -100 to 100
+                // Image GPU Processing attributes
+            RASPICAM_ENCODING                    _encoding;
+            RASPICAM_EXPOSURE                    _exposure;
+            RASPICAM_AWB                         _awb;
+            RASPICAM_IMAGE_EFFECT                _image_effect;
+            RASPICAM_METERING                    _metering;
+                // Other settings attibutes
+            bool                                 _settings_changed;
+            bool                                 _flip_horizontal;
+            bool                                 _flip_vertical;
 
-            unsigned int getWidth();
-            unsigned int getHeight();
-            unsigned int getBrightness();
-            unsigned int getRotation();
-            unsigned int getQuality();
-            int getISO();
-            int getSharpness();
-            int getContrast();
-            int getSaturation();
-            RASPICAM_ENCODING getEncoding();
-            RASPICAM_EXPOSURE getExposure();
-            RASPICAM_AWB getAWB();
-            RASPICAM_IMAGE_EFFECT getImageEffect();
-            RASPICAM_METERING getMetering();
-            bool isHorizontallyFlipped();
-            bool isVerticallyFlipped();
+            // Methods
+                // MMAL methods
+            static MMAL_FOURCC_T                     convertEncoding(   RASPICAM_ENCODING     encoding);
+            static MMAL_PARAM_EXPOSUREMETERINGMODE_T convertMetering(   RASPICAM_METERING     metering);
+            static MMAL_PARAM_EXPOSUREMODE_T         convertExposure(   RASPICAM_EXPOSURE     exposure);
+            static MMAL_PARAM_AWBMODE_T              convertAWB(        RASPICAM_AWB          awb     );
+            static MMAL_PARAM_IMAGEFX_T              convertImageEffect(RASPICAM_IMAGE_EFFECT image_fx);
+                // Camera settings
+            void                              commitBrightness(  void);
+            void                              commitQuality(     void);
+            void                              commitRotation(    void);
+            void                              commitISO(         void);
+            void                              commitSharpness(   void);
+            void                              commitContrast(    void);
+            void                              commitSaturation(  void);
+            void                              commitExposure(    void);
+            void                              commitAWB(         void);
+            void                              commitImageEffect( void);
+            void                              commitMetering(    void);
+            void                              commitFlips(       void);
+                // Camera interface
+            int                               startCapture(      void);
+            int                               createCamera(      void);
+            int                               createEncoder(     void);
+            void                              disableComponents( void);
+            void                              destroyCamera(     void);
+            void                              destroyEncoder(    void);
+            void                              disablePorts(      void);
+            void                              setDefaults(       void);
+            MMAL_STATUS_T                     connectPorts(      MMAL_PORT_T*          port_output,
+                                                                 MMAL_PORT_T*          port_input ,
+                                                                 MMAL_CONNECTION_T**   connection );
+            MMAL_STATUS_T                     disconnectPorts(   MMAL_CONNECTION_T**   connection );
+
+        public:
+            static const std::string API_NAME;
+
+            // Constructor
+            Private_Impl_Still(void);
+
+            // Destructor
+            ~Private_Impl_Still(void) { this->release(); };
+
+            int    initialize(        void);
+            int    release(           void);
+            int    startCapture(      imageTakenCallback          callback_user    ,
+                                      uchar*                      data_preallocated,
+                                      uint                        offset           ,
+                                      uint                        length           );
+            void   stopCapture(       void);
+            bool   takePicture(       uchar*                      data_preallocated,
+                                      uint                        length );
+
+            size_t getImageBufferSize(void) const;
+            void   bufferCallback(    MMAL_PORT_T*                port  ,
+                                      MMAL_BUFFER_HEADER_T*       buffer);
+            void   commitParameters(  void);
+            void   setWidth(          const uint                  width             );
+            void   setHeight(         const uint                  height            );
+            void   setCaptureSize(    const uint                  width, uint height);
+            void   setBrightness(     const uint                  brightness        );
+            void   setQuality(        const uint                  quality           );
+            void   setRotation(       int                         rotation          );
+            void   setISO(            const int                   iso               );
+            void   setSharpness(      const int                   sharpness         );
+            void   setContrast(       const int                   contrast          );
+            void   setSaturation(     const int                   saturation        );
+            void   setEncoding(       const RASPICAM_ENCODING     encoding          );
+            void   setExposure(       const RASPICAM_EXPOSURE     exposure          );
+            void   setAWB(            const RASPICAM_AWB          awb               );
+            void   setImageEffect(    const RASPICAM_IMAGE_EFFECT image_fx          );
+            void   setMetering(       const RASPICAM_METERING     metering          );
+            void   setHorizontalFlip( const bool                  flip              );
+            void   setVerticalFlip(   const bool                  flip              );
+
+            uint                  getWidth(             void) const {return _width;          };
+            uint                  getHeight(            void) const {return _height;         };
+            uint                  getBrightness(        void) const {return _brightness;     };
+            uint                  getRotation(          void) const {return _rotation;       };
+            uint                  getQuality(           void) const {return _quality;        };
+            int                   getISO(               void) const {return _iso;            };
+            int                   getSharpness(         void) const {return _sharpness;      };
+            int                   getContrast(          void) const {return _contrast;       };
+            int                   getSaturation(        void) const {return _saturation;     };
+            RASPICAM_ENCODING     getEncoding(          void) const {return _encoding;       };
+            RASPICAM_EXPOSURE     getExposure(          void) const {return _exposure;       };
+            RASPICAM_AWB          getAWB(               void) const {return _awb;            };
+            RASPICAM_IMAGE_EFFECT getImageEffect(       void) const {return _image_effect;   };
+            RASPICAM_METERING     getMetering(          void) const {return _metering;       };
+            bool                  isHorizontallyFlipped(void) const {return _flip_horizontal;};
+            bool                  isVerticallyFlipped(  void) const {return _flip_vertical;  };
 
 
             //Returns an id of the camera. We assume the camera id is the one of the raspberry
