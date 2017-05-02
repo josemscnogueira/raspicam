@@ -46,6 +46,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <iostream>
 #include <semaphore.h>
 
+#define PREVIEW_DEFAULT_WIDTH   640
+#define PREVIEW_DEFAULT_HEIGHT  480
+
 
 namespace raspicam
 {
@@ -67,6 +70,46 @@ typedef struct
     uint                 offset;
     uint                 length;
 } RASPICAM_USERDATA;
+
+
+/**
+ * Auxiliary functions
+ */
+/**
+ * Convert a MMAL status return value to a simple boolean of success
+ * ALso displays a fault if code is not success
+ *
+ * @param status The error code to convert
+ * @return 0 if status is success, 1 otherwise
+ */
+int mmal_status_to_int(MMAL_STATUS_T status)
+{
+    if (status == MMAL_SUCCESS) return 0;
+    else
+    {
+        switch (status)
+        {
+            case MMAL_ENOMEM   : std::cerr << "Out of memory\n"                                          ; break;
+            case MMAL_ENOSPC   : std::cerr << "Out of resources (other than memory)\n"                   ; break;
+            case MMAL_EINVAL   : std::cerr << "Argument is invalid\n"                                    ; break;
+            case MMAL_ENOSYS   : std::cerr << "Function not implemented\n"                               ; break;
+            case MMAL_ENOENT   : std::cerr << "No such file or directory\n"                              ; break;
+            case MMAL_ENXIO    : std::cerr << "No such device or address\n"                              ; break;
+            case MMAL_EIO      : std::cerr << "I/O error\n"                                              ; break;
+            case MMAL_ESPIPE   : std::cerr << "Illegal seek\n"                                           ; break;
+            case MMAL_ECORRUPT : std::cerr << "Data is corrupt \attention FIXME: not POSIX\n"            ; break;
+            case MMAL_ENOTREADY: std::cerr << "Component is not ready \attention FIXME: not POSIX\n"     ; break;
+            case MMAL_ECONFIG  : std::cerr << "Component is not configured \attention FIXME: not POSIX\n"; break;
+            case MMAL_EISCONN  : std::cerr << "Port is already connected\n"                              ; break;
+            case MMAL_ENOTCONN : std::cerr << "Port is disconnected\n"                                   ; break;
+            case MMAL_EAGAIN   : std::cerr << "Resource temporarily unavailable. Try again later\n"      ; break;
+            case MMAL_EFAULT   : std::cerr << "Bad address\n"                                            ; break;
+            default            : std::cerr << "Unknown status error\n"                                   ; break;
+        }
+
+        return 1;
+    }
+}
 
 
 /**
@@ -103,6 +146,8 @@ static void camera_control_callback(MMAL_PORT_T*          port  ,
     {
         std::cerr << "Received unexpected camera control callback event, " << buffer->cmd << '\n';
     }
+
+    mmal_buffer_header_release(buffer);
 }
 
 
@@ -180,7 +225,11 @@ static void encoder_buffer_callback(MMAL_PORT_T*          port  ,
 }
 
 
+/**************************************************************************************************
+ *   Private_Impl_Still Code                                                                      *
+ **************************************************************************************************/
 const std::string Private_Impl_Still::API_NAME = "PRIVATE_IMPL_RaspiCamStill";
+
 
 /**
  *
@@ -210,15 +259,15 @@ Private_Impl_Still::Private_Impl_Still(void)
     this->setDefaults();
 }
 
+
 /**
  *
  */
 void Private_Impl_Still::getSensorInfo(void)
 {
     MMAL_COMPONENT_T*   camera_info;
-    MMAL_STATUS_T       status;
+    MMAL_STATUS_T       status = mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA_INFO, &camera_info);
 
-    status = mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA_INFO, &camera_info);
     if (status == MMAL_SUCCESS)
     {
         // Deliberately undersize to check firmware veresion
@@ -243,14 +292,19 @@ void Private_Impl_Still::getSensorInfo(void)
                 {
                     _width  = camera_info_param.cameras[_camera_idx].max_width;
                     _height = camera_info_param.cameras[_camera_idx].max_height;
-
                 }
 
                 // Restore camera name
                 _camera_name = camera_info_param.cameras[_camera_idx].camera_name;
                 _camera_name.resize(MMAL_PARAMETER_CAMERA_INFO_MAX_STR_LEN);
+
+                std::cout << "Recognized sensor " << _camera_name << '\n';
+                std::cout << "    -> width  ⁼ "   << _width       << '\n';
+                std::cout << "    -> height ⁼ "   << _height      << '\n';
             }
         }
+
+        mmal_component_destroy(camera_info);
     }
 
     // Failed to get sensor information, assume Sony IMX219
@@ -261,7 +315,6 @@ void Private_Impl_Still::getSensorInfo(void)
         _height = 2464;
     }
 }
-
 
 
 /**
@@ -297,6 +350,7 @@ void Private_Impl_Still::setDefaults(void)
 
     _encoding              = RASPICAM_ENCODING_JPEG;
 	_image_fx              = RASPICAM_IMAGE_EFFECT_NONE;
+    _drc                   = MMAL_PARAMETER_DRC_STRENGTH_OFF;
 
     // Get sensor information (resolution and name)
     this->getSensorInfo();
@@ -305,69 +359,43 @@ void Private_Impl_Still::setDefaults(void)
 }
 
 
-
 /**
  *
  */
-void Private_Impl_Still::commitParameters(void)
+int Private_Impl_Still::commitParameters(void)
 {
-    if (!_settings_changed) return;
+    if (!_settings_changed) return MMAL_SUCCESS;
 
-    commitSharpness();
-    commitContrast();
-    commitBrightness();
-    commitQuality();
-    commitSaturation();
-    commitISO();
-    commitExposure();
-    commitMetering();
-    commitAWB();
-    commitImageEffect();
-    commitRotation();
-    commitFlips();
-
-    // Set Video Stabilization
-    if (mmal_port_parameter_set_boolean(_camera->control, MMAL_PARAMETER_VIDEO_STABILISATION, 0) != MMAL_SUCCESS)
-    {
-        std::cerr << API_NAME << ": Failed to set video stabilization parameter.\n";
-    }
-
-    // Set Exposure Compensation
-    if (mmal_port_parameter_set_int32(_camera->control, MMAL_PARAMETER_EXPOSURE_COMP, 0) != MMAL_SUCCESS)
-    {
-        std::cerr << API_NAME << ": Failed to set exposure compensation parameter.\n";
-    }
-
-    // Set Color Efects
-    MMAL_PARAMETER_COLOURFX_T colfx        = { {MMAL_PARAMETER_COLOUR_EFFECT, sizeof(colfx) }, 0, 0, 0 };
-                              colfx.enable =   0;
-                              colfx.u      = 128;
-                              colfx.v      = 128;
-    if (mmal_port_parameter_set(_camera->control, &colfx.hdr) != MMAL_SUCCESS)
-    {
-        std::cerr << API_NAME << ": Failed to set color effects parameter.\n";
-    }
-
-    // Set ROI
-    MMAL_PARAMETER_INPUT_CROP_T crop = { {MMAL_PARAMETER_INPUT_CROP, sizeof(MMAL_PARAMETER_INPUT_CROP_T)} };
-                                crop.rect.x      = (65536 * 0);
-                                crop.rect.y      = (65536 * 0);
-                                crop.rect.width  = (65536 * 1);
-                                crop.rect.height = (65536 * 1);
-    if (mmal_port_parameter_set(_camera->control, &crop.hdr) != MMAL_SUCCESS)
-    {
-        std::cerr << API_NAME << ": Failed to set ROI parameter.\n";
-    }
+    int status  = commitSaturation();
+        status += commitSharpness();
+        status += commitContrast();
+        status += commitBrightness();
+        status += commitISO();
+        status += commitVideoStabilization();
+        status += commitExposureCompensation();
+        status += commitExposureMode();
+        status += commitExposureMetering();
+        status += commitAWB();
+        status += commitAWBGains();
+        status += commitImageFX();
+        status += commitColorFX();
+        status += commitRotation();
+        status += commitFlips();
+        status += commitROI();
+        status += commitShutterSpeed();
+        status += commitDRC();
 
     // Set encoder encoding
     if (_port_encoder_output != NULL)
     {
         _port_encoder_output->format->encoding = this->convertEncoding(_encoding);
 
-        mmal_port_format_commit(_port_encoder_output);
+        status += mmal_status_to_int(mmal_port_format_commit(_port_encoder_output));
     }
 
     _settings_changed = false;
+
+    return status;
 }
 
 
@@ -398,9 +426,18 @@ MMAL_STATUS_T Private_Impl_Still::connectPorts(MMAL_PORT_T*        port_output,
  */
 int Private_Impl_Still::createCamera(void)
 {
+    std::cout << "Creating camera..." << '\n';
+
+    // Verify that _camera == NULL (not initialized)
+    if (_camera)
+    {
+        std::cerr << API_NAME << ": Camera seems to be already created.\n";
+        this->destroyCamera();
+        return -1;
+    }
+
     // Create camera component
     MMAL_STATUS_T status = mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA, &_camera);
-
     if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Failed to create camera component.\n";
@@ -420,9 +457,9 @@ int Private_Impl_Still::createCamera(void)
     }
 
     // Verify output ports
-    if (!_camera->output_num)
+    if (_camera->output_num < 3)
     {
-        std::cerr << API_NAME << ": Camera doesn't have output ports.\n";
+        std::cerr << API_NAME << ": Camera doesn't have enough output ports.\n";
         this->destroyCamera();
         return -1;
     }
@@ -437,11 +474,12 @@ int Private_Impl_Still::createCamera(void)
     }
 
     // Define camera port
-    _port_camera = _camera->output[MMAL_CAMERA_CAPTURE_PORT];
+    _port_camera               = _camera->output[MMAL_CAMERA_CAPTURE_PORT];
+    MMAL_PORT_T* port_preview  = _camera->output[MMAL_CAMERA_PREVIEW_PORT];
+    MMAL_PORT_T* port_video    = _camera->output[MMAL_CAMERA_VIDEO_PORT];
 
     // Enable the camera, and tell it its control callback function
     status = mmal_port_enable(_camera->control, camera_control_callback);
-
     if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Unable to enable control port.\n";
@@ -458,52 +496,83 @@ int Private_Impl_Still::createCamera(void)
             .max_stills_h                          = _height,
             .stills_yuv422                         = 0,
             .one_shot_stills                       = 1,
-            .max_preview_video_w                   = _width,
-            .max_preview_video_h                   = _height,
+            .max_preview_video_w                   = PREVIEW_DEFAULT_WIDTH,
+            .max_preview_video_h                   = PREVIEW_DEFAULT_HEIGHT,
             .num_preview_video_frames              = 3,
             .stills_capture_circular_buffer_height = 0,
             .fast_preview_resume                   = 0,
             .use_stc_timestamp                     = MMAL_PARAM_TIMESTAMP_MODE_RESET_STC
         };
 
-        mmal_port_parameter_set(_camera->control, &cfg_camera.hdr);
+        status = mmal_port_parameter_set(_camera->control, &cfg_camera.hdr);
+        if (status != MMAL_SUCCESS)
+        {
+            std::cerr << API_NAME << ": Failed to set camera still parameters.\n";
+            this->destroyCamera();
+            return -1;
+        }
     }
 
     // Commit configuration parameters
-    this->commitParameters();
-
-    // Change fps range if necessary, according to shutter_speed // FIXME
-    if (_shutter_speed > 6e6)
+    if (this->commitParameters() != 0)
     {
-        MMAL_PARAMETER_FPS_RANGE_T fps_range = { {MMAL_PARAMETER_FPS_RANGE, sizeof(fps_range)},
-                                                 { 50, 1000}                                  ,
-                                                 {166, 1000}                                  };
-        mmal_port_parameter_set(_port_camera, &fps_range.hdr);
+        std::cerr << API_NAME << ": Failed to commit camera settings.\n";
+        this->destroyCamera();
+        return -1;
     }
-    else if (_shutter_speed > 1e6)
+
+    // Set preview port format (?? FIXME necesseary ??)
+    MMAL_ES_FORMAT_T* format = port_preview->format;
+                      format->encoding                 = MMAL_ENCODING_OPAQUE;
+                      format->encoding_variant         = MMAL_ENCODING_I420;
+                      format->es->video.width          = VCOS_ALIGN_UP(PREVIEW_DEFAULT_WIDTH , 32);
+                      format->es->video.height         = VCOS_ALIGN_UP(PREVIEW_DEFAULT_HEIGHT, 16);
+                      format->es->video.crop.x         = 0;
+                      format->es->video.crop.y         = 0;
+                      format->es->video.crop.width     = PREVIEW_DEFAULT_WIDTH;
+                      format->es->video.crop.height    = PREVIEW_DEFAULT_HEIGHT;
+                      format->es->video.frame_rate.num = PREVIEW_FRAME_RATE_NUM;
+                      format->es->video.frame_rate.den = PREVIEW_FRAME_RATE_DEN;
+    status = mmal_port_format_commit(port_preview);
+    if (status != MMAL_SUCCESS)
     {
-        MMAL_PARAMETER_FPS_RANGE_T fps_range = { {MMAL_PARAMETER_FPS_RANGE, sizeof(fps_range)},
-                                                 {167, 1000}                                  ,
-                                                 {999, 1000}                                  };
-        mmal_port_parameter_set(_port_camera, &fps_range.hdr);
+        std::cerr << API_NAME << ": Camera preview format couldn't be set.\n";
+        this->destroyCamera();
+        return -1;
+    }
+
+    // Set the same format on the video port (which we don't use here)
+    mmal_format_full_copy(port_video->format, format);
+    status = mmal_port_format_commit(port_video);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Camera video format couldn't be set.\n";
+        this->destroyCamera();
+        return -1;
+    }
+
+    // Ensure there are enough buffers to avoid dropping frames
+    if (port_video->buffer_num > VIDEO_OUTPUT_BUFFERS_NUM)
+    {
+        port_video->buffer_num = VIDEO_OUTPUT_BUFFERS_NUM;
     }
 
     // Set format for camera port
-    MMAL_ES_FORMAT_T* format = _port_camera->format;
-                      format->encoding                 = MMAL_ENCODING_OPAQUE;
-                      format->es->video.width          = VCOS_ALIGN_UP( _width,32);
-                      format->es->video.height         = VCOS_ALIGN_UP(_height,16);
-                      format->es->video.crop.x         = 0;
-                      format->es->video.crop.y         = 0;
-                      format->es->video.crop.width     = _width;
-                      format->es->video.crop.height    = _height;
-                      format->es->video.frame_rate.num = STILLS_FRAME_RATE_NUM;
-                      format->es->video.frame_rate.den = STILLS_FRAME_RATE_DEN;
+    format = _port_camera->format;
+    format->encoding                 = MMAL_ENCODING_OPAQUE;
+    format->es->video.width          = VCOS_ALIGN_UP(_width, 32);
+    format->es->video.height         = VCOS_ALIGN_UP(_height,16);
+    format->es->video.crop.x         = 0;
+    format->es->video.crop.y         = 0;
+    format->es->video.crop.width     = _width;
+    format->es->video.crop.height    = _height;
+    format->es->video.frame_rate.num = STILLS_FRAME_RATE_NUM;
+    format->es->video.frame_rate.den = STILLS_FRAME_RATE_DEN;
 
     status = mmal_port_format_commit(_port_camera);
     if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Camera port format couldn't be set.\n";
+        std::cerr << API_NAME << ": Camera still port format couldn't be set.\n";
         this->destroyCamera();
         return -1;
     }
@@ -523,6 +592,8 @@ int Private_Impl_Still::createCamera(void)
         return -1;
     }
 
+    std::cout << "Creating camera...DONE" << '\n';
+
     return 0;
 }
 
@@ -535,7 +606,6 @@ void Private_Impl_Still::destroyCamera(void)
     if (_camera) mmal_component_destroy(_camera);
     _camera = NULL;
 }
-
 
 
 /**
@@ -834,7 +904,7 @@ int Private_Impl_Still::startCapture(void)
 
     // If the parameters were changed and this function wasn't called, it will be called here
     // However if the parameters weren't changed, the function won't do anything - it will return right away
-    commitParameters();
+    this->commitParameters();
 
     if (_port_encoder_output->is_enabled)
     {
@@ -943,6 +1013,7 @@ void Private_Impl_Still::setQuality(const uint quality)
     _settings_changed = true;
 }
 
+
 /**
  *
  */
@@ -955,6 +1026,7 @@ void Private_Impl_Still::setRotation(int rotation)
     _settings_changed = true;
 }
 
+
 /**
  *
  */
@@ -963,6 +1035,7 @@ void Private_Impl_Still::setISO(const int iso)
     _iso              = iso;
     _settings_changed = true;
 }
+
 
 /**
  *
@@ -988,6 +1061,7 @@ void Private_Impl_Still::setContrast(const int contrast)
 
     _settings_changed = true;
 }
+
 
 /**
  *
@@ -1076,166 +1150,377 @@ void Private_Impl_Still::setVerticalFlip(const bool flip)
 /**
  *
  */
-void Private_Impl_Still::commitBrightness(void)
+int Private_Impl_Still::commitBrightness(void)
 {
-    if (mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_BRIGHTNESS, (MMAL_RATIONAL_T) {int(_brightness), 100}) != MMAL_SUCCESS)
+    if (!_camera) return 1;
+
+    const int param = _brightness;
+    if ( (param < 0) || (param > 100) )
+    {
+        std::cerr << API_NAME << "Invalid brightness value.\n";
+        return 1;
+    }
+
+    MMAL_RATIONAL_T value  = {param, 100};
+    MMAL_STATUS_T   status = mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_BRIGHTNESS, value);
+    if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Failed to set brightness parameter.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitQuality(void)
+int Private_Impl_Still::commitISO(void)
 {
-    if (_port_encoder_output != NULL)
-    {
-        if (mmal_port_parameter_set_uint32(_port_encoder_output, MMAL_PARAMETER_JPEG_Q_FACTOR, _quality) != MMAL_SUCCESS)
-        {
-            std::cerr << API_NAME << ": Failed to set JPEG quality parameter.\n";
-        }
-    }
-}
+    if (!_camera) return 1;
 
-/**
- *
- */
-void Private_Impl_Still::commitRotation(void)
-{
-    const int rotation = int(_rotation / 90) * 90;
-
-    if ( (mmal_port_parameter_set_int32(_camera->output[0], MMAL_PARAMETER_ROTATION, rotation) != MMAL_SUCCESS) ||
-         (mmal_port_parameter_set_int32(_camera->output[1], MMAL_PARAMETER_ROTATION, rotation) != MMAL_SUCCESS) ||
-         (mmal_port_parameter_set_int32(_camera->output[2], MMAL_PARAMETER_ROTATION, rotation) != MMAL_SUCCESS)   )
-    {
-        std::cerr << API_NAME << ": Failed to set rotation parameter.\n";
-    }
-}
-
-
-/**
- *
- */
-void Private_Impl_Still::commitISO(void)
-{
-    if (mmal_port_parameter_set_uint32(_camera->control, MMAL_PARAMETER_ISO, _iso) != MMAL_SUCCESS)
+    MMAL_STATUS_T status = mmal_port_parameter_set_uint32(_camera->control, MMAL_PARAMETER_ISO, _iso);
+    if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Failed to set ISO parameter.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitSharpness(void)
+int Private_Impl_Still::commitVideoStabilization(void)
 {
-    if (mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_SHARPNESS, (MMAL_RATIONAL_T) {_sharpness, 100}) != MMAL_SUCCESS )
+    if (!_camera) return 1;
+
+    const bool    value  = _video_stabilization != 0 ? true : false;
+    MMAL_STATUS_T status = mmal_port_parameter_set_boolean(_camera->control, MMAL_PARAMETER_VIDEO_STABILISATION, value);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Failed to set video stabilization parameter.\n";
+    }
+
+    return mmal_status_to_int(status);
+}
+
+
+/**
+ *
+ */
+int Private_Impl_Still::commitExposureCompensation(void)
+{
+    if (!_camera) return 1;
+
+    MMAL_STATUS_T status = mmal_port_parameter_set_int32(_camera->control, MMAL_PARAMETER_EXPOSURE_COMP, _exposure_compensation);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Failed to set exposure compensation parameter.\n";
+    }
+
+    return mmal_status_to_int(status);
+}
+
+
+/**
+ *
+ */
+int Private_Impl_Still::commitExposureMode(void)
+{
+    if (!_camera) return 1;
+
+    MMAL_PARAMETER_EXPOSUREMODE_T exp_mode = { {MMAL_PARAMETER_EXPOSURE_MODE,sizeof(exp_mode)}, this->convertExposure(_exposure_mode) };
+
+    MMAL_STATUS_T status = mmal_port_parameter_set(_camera->control, &exp_mode.hdr);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Failed to set exposure mode parameter.\n";
+    }
+
+    return mmal_status_to_int(status);
+}
+
+
+/**
+ *
+ */
+int Private_Impl_Still::commitExposureMetering(void)
+{
+    if (!_camera) return 1;
+
+    MMAL_PARAMETER_EXPOSUREMETERINGMODE_T param  = { {MMAL_PARAMETER_EXP_METERING_MODE,sizeof(param)}, this->convertMetering(_exposure_metering)};
+    MMAL_STATUS_T                         status = mmal_port_parameter_set(_camera->control, &param.hdr);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Failed to set exposure metering parameter.\n";
+    }
+
+   return mmal_status_to_int(status);
+}
+
+
+/**
+ *
+ */
+int Private_Impl_Still::commitSharpness(void)
+{
+    if (!_camera) return 1;
+
+    const int param = _sharpness;
+    if ( (param < -100) || (param > 100) )
+    {
+        std::cerr << API_NAME << "Invalid saturation value.\n";
+        return 1;
+    }
+
+    MMAL_RATIONAL_T value  = {param, 100};
+    MMAL_STATUS_T   status = mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_SHARPNESS, value);
+    if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Failed to set sharpness parameter.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitContrast(void)
+int Private_Impl_Still::commitContrast(void)
 {
-    if (mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_CONTRAST, (MMAL_RATIONAL_T) {_contrast, 100}) != MMAL_SUCCESS)
+    if (!_camera) return 1;
+
+    const int param = _contrast;
+    if ( (param < -100) || (param > 100) )
+    {
+        std::cerr << API_NAME << "Invalid saturation value.\n";
+        return 1;
+    }
+
+    MMAL_RATIONAL_T value  = {param, 100};
+    MMAL_STATUS_T   status = mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_CONTRAST, value);
+    if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Failed to set contrast parameter.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitSaturation(void)
+int Private_Impl_Still::commitSaturation(void)
 {
-    if (mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_SATURATION, (MMAL_RATIONAL_T) {_saturation, 100}) != MMAL_SUCCESS)
+    if (!_camera) return 1;
+
+    const int param = _saturation;
+    if ( (param < -100) || (param > 100) )
+    {
+        std::cerr << API_NAME << "Invalid saturation value.\n";
+        return 1;
+    }
+
+    MMAL_RATIONAL_T value  = {param, 100};
+    MMAL_STATUS_T   status = mmal_port_parameter_set_rational(_camera->control, MMAL_PARAMETER_SATURATION, value);
+    if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Failed to set saturation parameter.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitExposure(void)
+int Private_Impl_Still::commitAWB(void)
 {
-    MMAL_PARAMETER_EXPOSUREMODE_T exp_mode = { {MMAL_PARAMETER_EXPOSURE_MODE,sizeof(exp_mode)}, this->convertExposure(_exposure_mode) };
+    if (!_camera) return 1;
 
-    if (mmal_port_parameter_set(_camera->control, &exp_mode.hdr) != MMAL_SUCCESS)
+    MMAL_PARAMETER_AWBMODE_T param  = { {MMAL_PARAMETER_AWB_MODE,sizeof(param)}, this->convertAWB(_awb) };
+    MMAL_STATUS_T            status = mmal_port_parameter_set(_camera->control, &param.hdr);
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set exposure parameter.\n";
+        std::cerr << API_NAME << ": Failed to set AWB mode parameter.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitAWB(void)
+int Private_Impl_Still::commitAWBGains(void)
 {
-    MMAL_PARAMETER_AWBMODE_T param = { {MMAL_PARAMETER_AWB_MODE,sizeof(param)}, this->convertAWB(_awb) };
+    if (!_camera) return 1;
 
-    if (mmal_port_parameter_set(_camera->control, &param.hdr) != MMAL_SUCCESS)
+    MMAL_PARAMETER_AWB_GAINS_T param = { {MMAL_PARAMETER_CUSTOM_AWB_GAINS,sizeof(param)}, {0,0}, {0,0}};
+                               param.r_gain.num = (unsigned int)(_awb_gains_r * 0x10000);
+                               param.b_gain.num = (unsigned int)(_awb_gains_b * 0x10000);
+                               param.r_gain.den = 0x10000;
+                               param.b_gain.den = 0x10000;
+
+    MMAL_STATUS_T              status = mmal_port_parameter_set(_camera->control, &param.hdr);
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set AWB parameter.\n";
+        std::cerr << API_NAME << ": Failed to set AWB gains parameters.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitImageEffect(void)
+int Private_Impl_Still::commitImageFX(void)
 {
-    MMAL_PARAMETER_IMAGEFX_T image_fx = { {MMAL_PARAMETER_IMAGE_EFFECT,sizeof(image_fx)}, this->convertImageEffect(_image_fx) };
+    if (!_camera) return 1;
 
-    if (mmal_port_parameter_set(_camera->control, &image_fx.hdr) != MMAL_SUCCESS)
+    MMAL_PARAMETER_IMAGEFX_T param  = { {MMAL_PARAMETER_IMAGE_EFFECT,sizeof(param)}, this->convertImageEffect(_image_fx) };
+    MMAL_STATUS_T            status = mmal_port_parameter_set(_camera->control, &param.hdr);
+    if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Failed to set image effect parameter.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitMetering(void)
+int Private_Impl_Still::commitColorFX(void)
 {
-    MMAL_PARAMETER_EXPOSUREMETERINGMODE_T meter_mode = { {MMAL_PARAMETER_EXP_METERING_MODE, sizeof(meter_mode)}, this->convertMetering(_exposure_metering) };
+    if (!_camera) return 1;
 
-    if (mmal_port_parameter_set(_camera->control, &meter_mode.hdr) != MMAL_SUCCESS)
+    MMAL_PARAMETER_COLOURFX_T param        = { {MMAL_PARAMETER_COLOUR_EFFECT,sizeof(param)}, 0, 0, 0 };
+                              param.enable = 0;
+                              param.u      = 128;
+                              param.v      = 128;
+    MMAL_STATUS_T             status       = mmal_port_parameter_set(_camera->control, &param.hdr);
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set metering parameter.\n";
+        std::cerr << API_NAME << ": Failed to set color effect parameter.\n";
     }
+
+    return mmal_status_to_int(status);
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::commitFlips(void)
+int Private_Impl_Still::commitRotation(void)
 {
-    MMAL_PARAMETER_MIRROR_T mirror = { {MMAL_PARAMETER_MIRROR, sizeof(MMAL_PARAMETER_MIRROR_T)}, MMAL_PARAM_MIRROR_NONE};
+    if (!_camera                ) return 1;
+    if ( _camera->output_num < 3) return 1;
 
-    if      ( _flip_horizontal && _flip_vertical) mirror.value = MMAL_PARAM_MIRROR_BOTH;
-    else if ( _flip_horizontal                  ) mirror.value = MMAL_PARAM_MIRROR_HORIZONTAL;
-    else if (                     _flip_vertical) mirror.value = MMAL_PARAM_MIRROR_VERTICAL;
+    const int param = int((_rotation % 360) / 90) * 90;
 
-    if ( (mmal_port_parameter_set(_camera->output[0], &mirror.hdr) != MMAL_SUCCESS) ||
-         (mmal_port_parameter_set(_camera->output[1], &mirror.hdr) != MMAL_SUCCESS) ||
-         (mmal_port_parameter_set(_camera->output[2], &mirror.hdr)                )   )
+    MMAL_STATUS_T               status = mmal_port_parameter_set_int32(_camera->output[0], MMAL_PARAMETER_ROTATION, param);
+    if (status == MMAL_SUCCESS) status = mmal_port_parameter_set_int32(_camera->output[1], MMAL_PARAMETER_ROTATION, param);
+    if (status == MMAL_SUCCESS) status = mmal_port_parameter_set_int32(_camera->output[2], MMAL_PARAMETER_ROTATION, param);
+
+    if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Failed to set horizontal/vertical flip parameter.\n";
+        std::cerr << API_NAME << ": Failed to set rotation parameter.\n";
     }
+
+    return mmal_status_to_int(status);
+}
+
+
+/**
+ *
+ */
+int Private_Impl_Still::commitFlips(void)
+{
+    if (!_camera                ) return 1;
+    if ( _camera->output_num < 3) return 1;
+
+    MMAL_PARAMETER_MIRROR_T param = { {MMAL_PARAMETER_MIRROR, sizeof(MMAL_PARAMETER_MIRROR_T)}, MMAL_PARAM_MIRROR_NONE};
+
+    if      ( _flip_horizontal && _flip_vertical) param.value = MMAL_PARAM_MIRROR_BOTH;
+    else if ( _flip_horizontal                  ) param.value = MMAL_PARAM_MIRROR_HORIZONTAL;
+    else if (                     _flip_vertical) param.value = MMAL_PARAM_MIRROR_VERTICAL;
+
+    MMAL_STATUS_T               status = mmal_port_parameter_set(_camera->output[0], &param.hdr);
+    if (status == MMAL_SUCCESS) status = mmal_port_parameter_set(_camera->output[1], &param.hdr);
+    if (status == MMAL_SUCCESS) status = mmal_port_parameter_set(_camera->output[2], &param.hdr);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Failed to set image flip parameter.\n";
+    }
+
+    return mmal_status_to_int(status);
+}
+
+
+/**
+ *
+ */
+int Private_Impl_Still::commitROI(void)
+{
+    if (!_camera) return 1;
+
+    MMAL_PARAMETER_INPUT_CROP_T param             = { {MMAL_PARAMETER_INPUT_CROP, sizeof(param)} };
+                                param.rect.x      = (0x10000 * 0);
+                                param.rect.y      = (0x10000 * 0);
+                                param.rect.width  = (0x10000 * 1);
+                                param.rect.height = (0x10000 * 1);
+
+    MMAL_STATUS_T status = mmal_port_parameter_set(_camera->control, &param.hdr);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Failed to set ROI parameters.\n";
+    }
+
+    return mmal_status_to_int(status);
+}
+
+
+/**
+ *
+ */
+int Private_Impl_Still::commitShutterSpeed(void)
+{
+    if (!_camera) return 1;
+
+    MMAL_STATUS_T status = mmal_port_parameter_set_uint32(_camera->control, MMAL_PARAMETER_SHUTTER_SPEED, _shutter_speed);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Failed to set shutter speed.\n";
+    }
+
+    return mmal_status_to_int(status);
+}
+
+
+
+/**
+ *
+ */
+int Private_Impl_Still::commitDRC(void)
+{
+    if (!_camera) return 1;
+
+    MMAL_PARAMETER_DRC_T param  = { {MMAL_PARAMETER_DYNAMIC_RANGE_COMPRESSION, sizeof(param)}, _drc };
+    MMAL_STATUS_T        status = mmal_port_parameter_set(_camera->control, &param.hdr);
+    if (status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Failed to set dynamic range compression.\n";
+    }
+
+    return mmal_status_to_int(status);
 }
 
 
@@ -1349,6 +1634,7 @@ MMAL_PARAM_IMAGEFX_T Private_Impl_Still::convertImageEffect(const RASPICAM_IMAGE
         default                                : return MMAL_PARAM_IMAGEFX_NONE;
     }
 }
+
 
 /**
  * Returns an id of the camera. We assume the camera id is the one of the raspberry

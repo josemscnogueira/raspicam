@@ -51,9 +51,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /**
  * Defines
  */
+#define MMAL_CAMERA_PREVIEW_PORT 0
+#define MMAL_CAMERA_VIDEO_PORT   1
 #define MMAL_CAMERA_CAPTURE_PORT 2
-#define STILLS_FRAME_RATE_NUM    3
+
+// Frames rates of 0 implies variable, but denominator needs to be 1 to prevent div by 0
+#define STILLS_FRAME_RATE_NUM    0
 #define STILLS_FRAME_RATE_DEN    1
+#define PREVIEW_FRAME_RATE_NUM   0
+#define PREVIEW_FRAME_RATE_DEN   1
+
 #define VIDEO_OUTPUT_BUFFERS_NUM 3
 
 namespace raspicam
@@ -118,6 +125,8 @@ namespace raspicam
 
             RASPICAM_ENCODING                    _encoding;
 			RASPICAM_IMAGE_EFFECT                _image_fx;
+            MMAL_PARAMETER_DRC_STRENGTH_T        _drc;
+
                 // Other atributes
             bool                                 _settings_changed;
 
@@ -129,18 +138,24 @@ namespace raspicam
             static MMAL_PARAM_AWBMODE_T              convertAWB(        RASPICAM_AWB          awb     );
             static MMAL_PARAM_IMAGEFX_T              convertImageEffect(RASPICAM_IMAGE_EFFECT image_fx);
                 // Camera settings
-            void                              commitBrightness(  void);
-            void                              commitQuality(     void);
-            void                              commitRotation(    void);
-            void                              commitISO(         void);
-            void                              commitSharpness(   void);
-            void                              commitContrast(    void);
-            void                              commitSaturation(  void);
-            void                              commitExposure(    void);
-            void                              commitAWB(         void);
-            void                              commitImageEffect( void);
-            void                              commitMetering(    void);
-            void                              commitFlips(       void);
+            int                               commitSaturation(  void);
+            int                               commitSharpness(   void);
+            int                               commitContrast(    void);
+            int                               commitBrightness(  void);
+            int                               commitISO(         void);
+            int                               commitVideoStabilization(void);
+            int                               commitExposureCompensation(void);
+            int                               commitExposureMode(void);
+            int                               commitExposureMetering(void);
+            int                               commitAWB(         void);
+            int                               commitAWBGains(    void);
+            int                               commitImageFX(     void);
+            int                               commitColorFX(     void);
+            int                               commitRotation(    void);
+            int                               commitFlips(       void);
+            int                               commitROI(         void);
+            int                               commitShutterSpeed(void);
+            int                               commitDRC(         void);
                 // Camera interface
             void                              getSensorInfo(     void);
 
@@ -181,7 +196,7 @@ namespace raspicam
                                       MMAL_BUFFER_HEADER_T*       buffer);
 
             // Setters
-            void   commitParameters(  void);
+            int    commitParameters(  void);
             void   setWidth(          const uint                  width             );
             void   setHeight(         const uint                  height            );
             void   setCaptureSize(    const uint                  width, uint height);
