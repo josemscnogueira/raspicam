@@ -348,7 +348,7 @@ void Private_Impl_Still::setDefaults(void)
     _flip_horizontal       = false;
     _flip_vertical         = false;
 
-    _encoding              = RASPICAM_ENCODING_JPEG;
+    _encoding              = RASPICAM_ENCODING_BMP;
 	_image_fx              = RASPICAM_IMAGE_EFFECT_NONE;
     _drc                   = MMAL_PARAMETER_DRC_STRENGTH_OFF;
 
@@ -613,10 +613,10 @@ void Private_Impl_Still::destroyCamera(void)
  */
 int Private_Impl_Still::createEncoder(void)
 {
-    // Create camera component
-    MMAL_STATUS_T status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &_encoder);
+    std::cout << "Creating encoder..." << '\n';
 
     // Create default image encoder
+    MMAL_STATUS_T status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &_encoder);
     if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Could not create encoder component.\n";
@@ -625,7 +625,7 @@ int Private_Impl_Still::createEncoder(void)
     }
 
     // Verify encoder input and output ports
-    if (!_encoder->input_num || !_encoder->output_num)
+    if ( (_encoder->input_num < 1) || (_encoder->output_num < 1) )
     {
         std::cerr << API_NAME << ": Encoder does not have input/output ports.\n";
         this->destroyEncoder();
@@ -633,32 +633,29 @@ int Private_Impl_Still::createEncoder(void)
     }
 
     // Copy encoder port references
-    _port_encoder_input  = _encoder->input[ 0];
+    _port_encoder_input  = _encoder->input[0];
     _port_encoder_output = _encoder->output[0];
 
     // Force encoder ports to have the same format
     mmal_format_copy(_port_encoder_output->format, _port_encoder_input->format);
 
     // Specify output format
-    _port_encoder_output->format->encoding = _encoding;
+    _port_encoder_output->format->encoding = this->convertEncoding(_encoding);
 
     // Set buffer size
+    _port_encoder_output->buffer_size = _port_encoder_output->buffer_size_recommended;
     if (_port_encoder_output->buffer_size < _port_encoder_output->buffer_size_min)
         _port_encoder_output->buffer_size = _port_encoder_output->buffer_size_min;
-    else
-        _port_encoder_output->buffer_size = _port_encoder_output->buffer_size_recommended;
 
-
+    _port_encoder_output->buffer_num = _port_encoder_output->buffer_num_recommended;
     if (_port_encoder_output->buffer_num < _port_encoder_output->buffer_num_min)
         _port_encoder_output->buffer_num = _port_encoder_output->buffer_num_min;
-    else
-        _port_encoder_output->buffer_num = _port_encoder_output->buffer_num_recommended;
 
     // Commit the port changes to the output port
     status = mmal_port_format_commit(_port_encoder_output);
     if (status != MMAL_SUCCESS)
     {
-        std::cerr << API_NAME << ": Could not set format on encoder output port.\n";
+        std::cerr << API_NAME << ": Unable to set format on encoder output port.\n";
         this->destroyEncoder();
         return -1;
     }
@@ -674,13 +671,28 @@ int Private_Impl_Still::createEncoder(void)
 
     // Set the JPEG restart interval
     status = mmal_port_parameter_set_uint32(_port_encoder_output, MMAL_PARAMETER_JPEG_RESTART_INTERVAL, 0);
+    if (0 && status != MMAL_SUCCESS)
+    {
+        std::cerr << API_NAME << ": Unable to set JPEG restart interval.\n";
+        this->destroyEncoder();
+        return -1;
+    }
 
     // Set up any required thumbnail
     {
         MMAL_PARAMETER_THUMBNAIL_CONFIG_T param_thumb = { {MMAL_PARAMETER_THUMBNAIL_CONFIGURATION, sizeof(param_thumb)},
-                                                           0, 0, 0, 0};
+                                                          .enable  =  1,
+                                                          .width   = 64,
+                                                          .height  = 48,
+                                                          .quality = 35};
 
         status = mmal_port_parameter_set(_encoder->control, &param_thumb.hdr);
+        if (status != MMAL_SUCCESS)
+        {
+            std::cerr << API_NAME << ": Thumbnail configuration coult not be set.\n";
+            this->destroyEncoder();
+            return -1;
+        }
     }
 
     // Enable encoder component
@@ -700,6 +712,8 @@ int Private_Impl_Still::createEncoder(void)
         this->destroyEncoder();
         return -1;
     }
+
+    std::cout << "Creating encoder...DONE" << '\n';
 
     return 0;
 }
