@@ -60,16 +60,15 @@ void usage() {
 int main ( int argc, char *argv[] ) {
     usage();
 
-    int width = getParamVal ( "-w",argc,argv,2592 );
-    int height =getParamVal ( "-h",argc,argv,1944 );
-    int iso=getParamVal ( "-iso",argc,argv,400);
+    // int width = getParamVal ( "-w",argc,argv,3280 );
+    // int height =getParamVal ( "-h",argc,argv,1624 );
+    // int iso=getParamVal ( "-iso",argc,argv,400);
 
 
-    cout << "Initializing ..."<<width<<"x"<<height<<endl;
-    Camera.setWidth ( width );
-    Camera.setHeight ( height );
-    Camera.setISO(iso);
-    Camera.setEncoding ( raspicam::RASPICAM_ENCODING_BMP );
+    // cout << "Initializing ..."<<width<<"x"<<height<<endl;
+    // Camera.setResolution(width,height);
+    // Camera.setISO(iso);
+    // Camera.setImageEncoding(raspicam::RASPICAM_ENCODING_BMP);
     Camera.open();
     cout<<"capture"<<endl;
     unsigned int length = Camera.getImageBufferSize(); // Header + Image Data + Padding
@@ -84,4 +83,3 @@ int main ( int argc, char *argv[] ) {
     file.write ( ( char* ) data,   length );
     return 0;
 }
-

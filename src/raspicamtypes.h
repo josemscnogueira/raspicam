@@ -127,5 +127,14 @@ namespace raspicam {
         RASPICAM_ENCODING_RGB
     } RASPICAM_ENCODING;
 
+    typedef enum RASPICAM_DRC
+    {
+       RASPICAM_DRC_OFF   ,
+       RASPICAM_DRC_LOW   ,
+       RASPICAM_DRC_MEDIUM,
+       RASPICAM_DRC_HIGH  ,
+       RASPICAM_DRC_MAX
+    } RASPICAM_DRC;
+
 };
 #endif

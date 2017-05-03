@@ -1,51 +1,35 @@
-/**********************************************************
- Software developed by AVA ( Ava Group of the University of Cordoba, ava  at uco dot es)
- Main author Rafael Munoz Salinas (rmsalinas at uco dot es)
- This software is released under BSD license as expressed below
--------------------------------------------------------------------
-Copyright (c) 2013, AVA ( Ava Group University of Cordoba, ava  at uco dot es)
-All rights reserved.
+/**
+ * @file   private_still_impl.cpp
+ * @author Jose Nogueira, josenogueira@biosurfit.com
+ * @date   May 2017
+ * @brief  Private implementation of camera in still mode
+ *         Uses picture port
+ *
+ * (extensive explanation)
+ */
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions
-are met:
-1. Redistributions of source code must retain the above copyright
-   notice, this list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright
-   notice, this list of conditions and the following disclaimer in the
-   documentation and/or other materials provided with the distribution.
-3. All advertising materials mentioning features or use of this software
-   must display the following acknowledgement:
 
-   This product includes software developed by the Ava group of the University of Cordoba.
-
-4. Neither the name of the University nor the names of its contributors
-   may be used to endorse or promote products derived from this software
-   without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY AVA ''AS IS'' AND ANY
-EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL AVA BE LIABLE FOR ANY
-DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-****************************************************************/
-
+/**
+ * Include files
+ */
 #include "private_still_impl.h"
-
-#include "interfaces/mmal/mmal_buffer.h"
-#include "interfaces/mmal/util/mmal_default_components.h"
-#include "interfaces/mmal/util/mmal_util.h"
-#include "interfaces/mmal/util/mmal_util_params.h"
 
 #include <fstream>
 #include <iostream>
 #include <semaphore.h>
 
+#include "interfaces/mmal/mmal_buffer.h"
+#include "interfaces/mmal/mmal_format.h"
+#include "interfaces/mmal/util/mmal_default_components.h"
+#include "interfaces/mmal/util/mmal_util.h"
+#include "interfaces/mmal/util/mmal_util_params.h"
+
+#include "raspitimer.h"
+
+
+/**
+ * Definitions
+ */
 #define PREVIEW_DEFAULT_WIDTH   640
 #define PREVIEW_DEFAULT_HEIGHT  480
 
@@ -62,13 +46,12 @@ typedef struct
 {
     Private_Impl_Still*  handle_camera;
     MMAL_POOL_T*         encoder_pool;
-    imageTakenCallback   callback_image;
+    ImageTakenCallback   callback_image;
     sem_t*               mutex;
     uchar*               data;
-    uint                 buffer_position;
-    uint                 offset_starting;
-    uint                 offset;
-    uint                 length;
+    size_t               data_offset;
+    size_t               image_offset;
+    size_t               length;
 } RASPICAM_USERDATA;
 
 
@@ -163,18 +146,20 @@ static void encoder_buffer_callback(MMAL_PORT_T*          port  ,
     if ( (userdata                != NULL) &&
          (userdata->handle_camera != NULL)   )
     {
-        if (buffer->length && userdata->data)
+        if ( (buffer->length > 0) && (userdata->data != NULL) )
         {
-            if (userdata->length < buffer->length)
+            // Ensure userdata memory is sufficient to store buffer data
+            if ( userdata->length < (buffer->length + userdata->data_offset) )
             {
                 flag_complete = true;
-                std::cerr << "Unable to write buffer user memory - aborting\n";
+                std::cerr << "Unable to write buffer user memory - " << buffer->length + userdata->data_offset << " > " << userdata->length << '\n';
             }
             else
             {
                 // Get data from buffer
                 mmal_buffer_header_mem_lock(buffer);
-                memcpy(userdata->data, buffer->data, buffer->length);
+                memcpy(userdata->data+userdata->data_offset, buffer->data, buffer->length);
+                userdata->data_offset += buffer->length;
                 mmal_buffer_header_mem_unlock(buffer);
             }
         }
@@ -213,9 +198,9 @@ static void encoder_buffer_callback(MMAL_PORT_T*          port  ,
     {
         if (userdata->mutex == NULL)
         {
-            userdata->callback_image(userdata->data                              ,
-                                     userdata->offset_starting                   ,
-                                     userdata->length - userdata->offset_starting);
+            userdata->callback_image(userdata->data                           ,
+                                     userdata->image_offset                   ,
+                                     userdata->length - userdata->image_offset);
         }
         else
         {
@@ -238,8 +223,6 @@ Private_Impl_Still::Private_Impl_Still(void)
 {
     // Camera initialized flag
     _is_initialized      = false;
-    _camera_name         = "";
-    _raw_mode            = false;
 
     // MMAL Components pointers
     _camera              = NULL;
@@ -255,6 +238,8 @@ Private_Impl_Still::Private_Impl_Still(void)
     _port_camera         = NULL;
     _port_encoder_input  = NULL;
     _port_encoder_output = NULL;
+
+    _sensor_name         = "";
 
     this->setDefaults();
 }
@@ -295,10 +280,10 @@ void Private_Impl_Still::getSensorInfo(void)
                 }
 
                 // Restore camera name
-                _camera_name = camera_info_param.cameras[_camera_idx].camera_name;
-                _camera_name.resize(MMAL_PARAMETER_CAMERA_INFO_MAX_STR_LEN);
+                _sensor_name = camera_info_param.cameras[_camera_idx].camera_name;
+                _sensor_name.resize(MMAL_PARAMETER_CAMERA_INFO_MAX_STR_LEN);
 
-                std::cout << "Recognized sensor " << _camera_name << '\n';
+                std::cout << "Recognized sensor " << _sensor_name << '\n';
                 std::cout << "    -> width  ⁼ "   << _width       << '\n';
                 std::cout << "    -> height ⁼ "   << _height      << '\n';
             }
@@ -322,35 +307,36 @@ void Private_Impl_Still::getSensorInfo(void)
  */
 void Private_Impl_Still::setDefaults(void)
 {
-    _width                 = 0;
-    _height                = 0;
-    _rotation              = 0;
-    _brightness            = 50;
-    _quality               = 85;
-    _iso                   = 100;
-    _sharpness             = 0;
-    _contrast              = 0;
-    _saturation            = 0;
-    _video_stabilization   = 0;
-
-    _sensor_mode           = 0;
-    _camera_idx            = 0;
+    _camera_idx            =     0;
+    _raw_mode              = false;
+    _sensor_mode           =     0;
+    _sensor_name           =    "";
+    _width                 =     0;
+    _height                =     0;
+    _iso                   =   100;
+    _brightness            =    50;
+    _sharpness             =     0;
+    _contrast              =     0;
+    _saturation            =     0;
+    _video_stabilization   =     0;
 
     _exposure_mode         = RASPICAM_EXPOSURE_AUTO;
-    _exposure_compensation = 0;
+    _exposure_compensation =     0;
     _exposure_metering     = RASPICAM_METERING_AVERAGE;
-    _shutter_speed         = 0;
+    _shutter_speed         =     0;
 
-    _awb                   = RASPICAM_AWB_AUTO;
-    _awb_gains_r           = 1.0;
-    _awb_gains_b           = 1.0;
+    _awb_mode              = RASPICAM_AWB_AUTO;
+    _awb_gains_r           =     1.0;
+    _awb_gains_b           =     1.0;
 
+    _rotation              =     0;
     _flip_horizontal       = false;
     _flip_vertical         = false;
 
-    _encoding              = RASPICAM_ENCODING_BMP;
-	_image_fx              = RASPICAM_IMAGE_EFFECT_NONE;
-    _drc                   = MMAL_PARAMETER_DRC_STRENGTH_OFF;
+    _image_encoding        = RASPICAM_ENCODING_JPEG;
+    _image_quality         =    85;
+    _image_fx              = RASPICAM_IMAGE_EFFECT_NONE;
+    _drc                   = RASPICAM_DRC_OFF;
 
     // Get sensor information (resolution and name)
     this->getSensorInfo();
@@ -388,7 +374,7 @@ int Private_Impl_Still::commitParameters(void)
     // Set encoder encoding
     if (_port_encoder_output != NULL)
     {
-        _port_encoder_output->format->encoding = this->convertEncoding(_encoding);
+        _port_encoder_output->format->encoding = this->convertEncoding(_image_encoding);
 
         status += mmal_status_to_int(mmal_port_format_commit(_port_encoder_output));
     }
@@ -640,7 +626,7 @@ int Private_Impl_Still::createEncoder(void)
     mmal_format_copy(_port_encoder_output->format, _port_encoder_input->format);
 
     // Specify output format
-    _port_encoder_output->format->encoding = this->convertEncoding(_encoding);
+    _port_encoder_output->format->encoding = this->convertEncoding(_image_encoding);
 
     // Set buffer size
     _port_encoder_output->buffer_size = _port_encoder_output->buffer_size_recommended;
@@ -661,7 +647,7 @@ int Private_Impl_Still::createEncoder(void)
     }
 
     // Set the JPEG quality level
-    status = mmal_port_parameter_set_uint32(_port_encoder_output, MMAL_PARAMETER_JPEG_Q_FACTOR, _quality);
+    status = mmal_port_parameter_set_uint32(_port_encoder_output, MMAL_PARAMETER_JPEG_Q_FACTOR, _image_quality);
     if (status != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Unable to set JPEG quality.\n";
@@ -813,41 +799,56 @@ int Private_Impl_Still::release(void)
 /**
  *
  */
-bool Private_Impl_Still::takePicture(uchar* data_preallocated, uint length)
+bool Private_Impl_Still::takePicture(uchar* data, uint length)
 {
+    std::cout << "taking picture...\n";
+
     int status = this->initialize();
-
-    if (status) return status;
-
-    // Init semaphore
-    sem_t     mutex;
-    sem_init(&mutex, 0, 0);
-
-    RASPICAM_USERDATA* userdata = new RASPICAM_USERDATA();
-                       userdata->handle_camera   = this;
-                       userdata->encoder_pool    = _encoder_pool;
-                       userdata->mutex           = &mutex;
-                       userdata->data            = data_preallocated;
-                       userdata->buffer_position = 0;
-                       userdata->offset          = 0;
-                       userdata->offset_starting = 0;
-                       userdata->length          = length;
-                       userdata->callback_image  = NULL;
-
-    _port_encoder_output->userdata = (struct MMAL_PORT_USERDATA_T *) userdata;
-
-    if ( (status = this->startCapture()) != 0 )
+    if (status != 0)
     {
-        delete userdata;
-        return false;
+        std::cerr << API_NAME << ": Failed to take picture | camera was not initialized.\n";
+        return status;
     }
 
-    // Semaphore barrier
-    sem_wait(   &mutex);
-    sem_destroy(&mutex);
+    // usleep(5e6);
+    //
+    // for (size_t idx = 0; idx < 10; ++idx)
+    // {
+    //     TIMER_usecCtx_t timer;
+    //     TIMER_usecStart(&timer);
 
-    this->stopCapture();
-    delete userdata;
+        // Init semaphore
+        sem_t     mutex;
+        sem_init(&mutex, 0, 0);
+
+        RASPICAM_USERDATA* userdata = new RASPICAM_USERDATA();
+                           userdata->handle_camera   = this;
+                           userdata->encoder_pool    = _encoder_pool;
+                           userdata->mutex           = &mutex;
+                           userdata->data            = data;
+                           userdata->data_offset     = 0;
+                           userdata->image_offset    = 0;
+                           userdata->length          = length;
+                           userdata->callback_image  = NULL;
+
+        _port_encoder_output->userdata = (struct MMAL_PORT_USERDATA_T *) userdata;
+
+        if ( (status = this->startCapture()) != 0 )
+        {
+            delete userdata;
+            return false;
+        }
+
+        // Semaphore barrier
+        sem_wait(   &mutex);
+        sem_destroy(&mutex);
+
+        this->stopCapture();
+        delete userdata;
+
+    //     std::cout << "taking picture...DONE in " << float(TIMER_usecElapsedUs(&timer)) / 1e6 << "secs\n";
+    // }
+
     return true;
 }
 
@@ -858,14 +859,14 @@ bool Private_Impl_Still::takePicture(uchar* data_preallocated, uint length)
 size_t Private_Impl_Still::getImageBufferSize(void) const
 {
     // For bmp images only!!! oversize the buffer so to fit BMP images
-    return _width * _height * 3 + 54;
+    return (_width * _height * 3) + 54;
 }
 
 
 /**
  *
  */
-int Private_Impl_Still::startCapture(imageTakenCallback  callback_user    ,
+int Private_Impl_Still::startCapture(ImageTakenCallback  callback_user    ,
                                      uchar*              data_preallocated,
                                      uint                offset           ,
                                      uint                length           )
@@ -875,9 +876,8 @@ int Private_Impl_Still::startCapture(imageTakenCallback  callback_user    ,
                        userdata->encoder_pool    = _encoder_pool;
                        userdata->mutex           = NULL;
                        userdata->data            = data_preallocated;
-                       userdata->buffer_position = 0;
-                       userdata->offset          = offset;
-                       userdata->offset_starting = offset;
+                       userdata->data_offset     = 0;
+                       userdata->image_offset    = offset;
                        userdata->length          = length;
                        userdata->callback_image  = callback_user;
 
@@ -900,7 +900,7 @@ int Private_Impl_Still::startCapture(void)
     }
 
     // Enable raw mode capture if specified
-    if (_raw_mode)
+    if (_raw_mode || true)
     {
         if (mmal_port_parameter_set_boolean(_port_camera, MMAL_PARAMETER_ENABLE_RAW_CAPTURE, 1) != MMAL_SUCCESS)
         {
@@ -909,16 +909,14 @@ int Private_Impl_Still::startCapture(void)
         }
     }
 
-    // There is a possibility that shutter needs to be set each loop. (raspistill code)
-    if (mmal_port_parameter_set_uint32(_camera->control, MMAL_PARAMETER_SHUTTER_SPEED, _shutter_speed) != MMAL_SUCCESS)
-    {
-        std::cerr << API_NAME << ": Unable to set shutter speed.\n";
-        return -1;
-    }
-
     // If the parameters were changed and this function wasn't called, it will be called here
     // However if the parameters weren't changed, the function won't do anything - it will return right away
-    this->commitParameters();
+    // Commit configuration parameters
+    if (this->commitParameters() != 0)
+    {
+        std::cerr << API_NAME << ": Failed to commit camera settings.\n";
+        return -1;
+    }
 
     if (_port_encoder_output->is_enabled)
     {
@@ -926,6 +924,7 @@ int Private_Impl_Still::startCapture(void)
         return -1;
     }
 
+    // Enable encoder output port
     if (mmal_port_enable(_port_encoder_output, encoder_buffer_callback) != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Could not enable encoder output port.\n";
@@ -933,7 +932,6 @@ int Private_Impl_Still::startCapture(void)
     }
 
     const int queue_size = mmal_queue_length(_encoder_pool->queue);
-
     for (int idx = 0; idx < queue_size; ++idx )
     {
         MMAL_BUFFER_HEADER_T* buffer = mmal_queue_get(_encoder_pool->queue);
@@ -949,6 +947,7 @@ int Private_Impl_Still::startCapture(void)
         }
     }
 
+    // Start capture
     if (mmal_port_parameter_set_boolean(_port_camera, MMAL_PARAMETER_CAPTURE, 1) != MMAL_SUCCESS)
     {
         std::cerr << API_NAME << ": Failed to start capture.\n";
@@ -976,9 +975,9 @@ void Private_Impl_Still::stopCapture(void)
 /**
  *
  */
-void Private_Impl_Still::setWidth(const uint width)
+void Private_Impl_Still::setSensorMode(const int value)
 {
-    _width            = width;
+    _sensor_mode      = value;
     _settings_changed = true;
 }
 
@@ -986,9 +985,9 @@ void Private_Impl_Still::setWidth(const uint width)
 /**
  *
  */
-void Private_Impl_Still::setHeight(const uint height)
+void Private_Impl_Still::setRawMode(const bool active)
 {
-    _height = height;
+    _raw_mode         = active;
     _settings_changed = true;
 }
 
@@ -996,21 +995,22 @@ void Private_Impl_Still::setHeight(const uint height)
 /**
  *
  */
-void Private_Impl_Still::setCaptureSize(const uint width ,
+void Private_Impl_Still::setResolution( const uint width ,
                                         const uint height)
 {
-    this->setWidth( width );
-    this->setHeight(height);
+    _width            = width;
+    _height           = height;
+    _settings_changed = true;
 }
 
 
 /**
  *
  */
-void Private_Impl_Still::setBrightness(const uint brightness)
+void Private_Impl_Still::setBrightness(const uint value)
 {
-    if (brightness > 100) _brightness = 100;
-    else                  _brightness = brightness;
+    if (value > 100) _brightness = 100;
+    else             _brightness = value;
 
     _settings_changed = true;
 }
@@ -1019,10 +1019,10 @@ void Private_Impl_Still::setBrightness(const uint brightness)
 /**
  *
  */
-void Private_Impl_Still::setQuality(const uint quality)
+void Private_Impl_Still::setImageQuality(const uint value)
 {
-    if (quality > 100) _quality = 100;
-    else               _quality = quality;
+    if (value > 100) _image_quality = 100;
+    else             _image_quality = value;
 
     _settings_changed = true;
 }
@@ -1044,9 +1044,9 @@ void Private_Impl_Still::setRotation(int rotation)
 /**
  *
  */
-void Private_Impl_Still::setISO(const int iso)
+void Private_Impl_Still::setShutterSpeed(const int value)
 {
-    _iso              = iso;
+    _shutter_speed    = value;
     _settings_changed = true;
 }
 
@@ -1054,12 +1054,9 @@ void Private_Impl_Still::setISO(const int iso)
 /**
  *
  */
-void Private_Impl_Still::setSharpness (const int sharpness)
+void Private_Impl_Still::setISO(const int value)
 {
-    if      (sharpness < -100) _sharpness = -100;
-    else if (sharpness >  100) _sharpness =  100;
-    else                       _sharpness = sharpness;
-
+    _iso              = value;
     _settings_changed = true;
 }
 
@@ -1067,24 +1064,11 @@ void Private_Impl_Still::setSharpness (const int sharpness)
 /**
  *
  */
-void Private_Impl_Still::setContrast(const int contrast)
+void Private_Impl_Still::setSharpness (const int value)
 {
-    if      (contrast < -100) _contrast = -100;
-    else if (contrast >  100) _contrast =  100;
-    else                      _contrast = contrast;
-
-    _settings_changed = true;
-}
-
-
-/**
- *
- */
-void Private_Impl_Still::setSaturation (const int saturation)
-{
-    if      (saturation < -100) _saturation  = -100;
-    else if (saturation >  100) _saturation  =  100;
-    else                        _saturation = saturation;
+    if      (value < -100) _sharpness = -100;
+    else if (value >  100) _sharpness =  100;
+    else                   _sharpness = value;
 
     _settings_changed = true;
 }
@@ -1093,9 +1077,12 @@ void Private_Impl_Still::setSaturation (const int saturation)
 /**
  *
  */
-void Private_Impl_Still::setEncoding(const RASPICAM_ENCODING encoding)
+void Private_Impl_Still::setContrast(const int value)
 {
-    _encoding         = encoding;
+    if      (value < -100) _contrast = -100;
+    else if (value >  100) _contrast =  100;
+    else                   _contrast = value;
+
     _settings_changed = true;
 }
 
@@ -1103,7 +1090,42 @@ void Private_Impl_Still::setEncoding(const RASPICAM_ENCODING encoding)
 /**
  *
  */
-void Private_Impl_Still::setExposure(const RASPICAM_EXPOSURE exposure)
+void Private_Impl_Still::setSaturation (const int value)
+{
+    if      (value < -100) _saturation  = -100;
+    else if (value >  100) _saturation  =  100;
+    else                   _saturation = value;
+
+    _settings_changed = true;
+}
+
+
+/**
+ *
+ */
+void Private_Impl_Still::setVideoStabilization(const int value)
+{
+    if (value > 0) _video_stabilization = 1;
+    else           _video_stabilization = 0;
+
+    _settings_changed      = true;
+}
+
+
+/**
+ *
+ */
+void Private_Impl_Still::setImageEncoding(const RASPICAM_ENCODING encoding)
+{
+    _image_encoding   = encoding;
+    _settings_changed = true;
+}
+
+
+/**
+ *
+ */
+void Private_Impl_Still::setExposureMode(const RASPICAM_EXPOSURE exposure)
 {
     _exposure_mode    = exposure;
     _settings_changed = true;
@@ -1113,10 +1135,40 @@ void Private_Impl_Still::setExposure(const RASPICAM_EXPOSURE exposure)
 /**
  *
  */
-void Private_Impl_Still::setAWB(const RASPICAM_AWB awb)
+void Private_Impl_Still::setExposureCompensation(const int value)
 {
-    _awb              = awb;
+    _exposure_compensation = value;
+    _settings_changed      = true;
+}
+
+
+/**
+ *
+ */
+void Private_Impl_Still::setExposureMetering(const RASPICAM_METERING metering)
+{
+    _exposure_metering = metering;
+    _settings_changed  = true;
+}
+
+
+/**
+ *
+ */
+void Private_Impl_Still::setAWBMode(const RASPICAM_AWB awb)
+{
+    _awb_mode         = awb;
     _settings_changed = true;
+}
+
+
+/**
+ *
+ */
+void Private_Impl_Still::setAWBGains(const float gain_r, const float gain_b)
+{
+    _awb_gains_r = gain_r;
+    _awb_gains_b = gain_b;
 }
 
 
@@ -1126,7 +1178,6 @@ void Private_Impl_Still::setAWB(const RASPICAM_AWB awb)
 void Private_Impl_Still::setImageEffect(const RASPICAM_IMAGE_EFFECT image_fx)
 {
     _image_fx         = image_fx;
-	_image_fx         = RASPICAM_IMAGE_EFFECT_NONE;
     _settings_changed = true;
 }
 
@@ -1134,10 +1185,10 @@ void Private_Impl_Still::setImageEffect(const RASPICAM_IMAGE_EFFECT image_fx)
 /**
  *
  */
-void Private_Impl_Still::setMetering(const RASPICAM_METERING metering)
+void Private_Impl_Still::setDRC(const RASPICAM_DRC drc)
 {
-    _exposure_metering = metering;
-    _settings_changed  = true;
+    _drc              = drc;
+    _settings_changed = true;
 }
 
 
@@ -1357,7 +1408,7 @@ int Private_Impl_Still::commitAWB(void)
 {
     if (!_camera) return 1;
 
-    MMAL_PARAMETER_AWBMODE_T param  = { {MMAL_PARAMETER_AWB_MODE,sizeof(param)}, this->convertAWB(_awb) };
+    MMAL_PARAMETER_AWBMODE_T param  = { {MMAL_PARAMETER_AWB_MODE,sizeof(param)}, this->convertAWB(_awb_mode) };
     MMAL_STATUS_T            status = mmal_port_parameter_set(_camera->control, &param.hdr);
     if (status != MMAL_SUCCESS)
     {
@@ -1527,7 +1578,7 @@ int Private_Impl_Still::commitDRC(void)
 {
     if (!_camera) return 1;
 
-    MMAL_PARAMETER_DRC_T param  = { {MMAL_PARAMETER_DYNAMIC_RANGE_COMPRESSION, sizeof(param)}, _drc };
+    MMAL_PARAMETER_DRC_T param  = { {MMAL_PARAMETER_DYNAMIC_RANGE_COMPRESSION, sizeof(param)}, this->convertDRC(_drc) };
     MMAL_STATUS_T        status = mmal_port_parameter_set(_camera->control, &param.hdr);
     if (status != MMAL_SUCCESS)
     {
@@ -1646,6 +1697,23 @@ MMAL_PARAM_IMAGEFX_T Private_Impl_Still::convertImageEffect(const RASPICAM_IMAGE
         case RASPICAM_IMAGE_EFFECT_COLORBALANCE: return MMAL_PARAM_IMAGEFX_COLOURBALANCE;
         case RASPICAM_IMAGE_EFFECT_CARTOON     : return MMAL_PARAM_IMAGEFX_CARTOON;
         default                                : return MMAL_PARAM_IMAGEFX_NONE;
+    }
+}
+
+
+/**
+ *
+ */
+MMAL_PARAMETER_DRC_STRENGTH_T Private_Impl_Still::convertDRC(const RASPICAM_DRC drc)
+{
+    switch (drc)
+    {
+        case RASPICAM_DRC_OFF    : return MMAL_PARAMETER_DRC_STRENGTH_OFF;
+        case RASPICAM_DRC_LOW    : return  MMAL_PARAMETER_DRC_STRENGTH_LOW;
+        case RASPICAM_DRC_MEDIUM : return  MMAL_PARAMETER_DRC_STRENGTH_MEDIUM;
+        case RASPICAM_DRC_HIGH   : return MMAL_PARAMETER_DRC_STRENGTH_HIGH;
+        case RASPICAM_DRC_MAX    : return MMAL_PARAMETER_DRC_STRENGTH_MAX;
+        default                  : return MMAL_PARAMETER_DRC_STRENGTH_OFF;
     }
 }
 

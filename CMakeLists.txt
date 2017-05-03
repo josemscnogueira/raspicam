@@ -37,7 +37,7 @@ OPTION(BUILD_UTILS 	"Acitvates/Deactivates building utils  libraries" ON)
 include_directories(${PROJECT_SOURCE_DIR}/dependencies ${PROJECT_SOURCE_DIR}/dependencies/mmal  ${PROJECT_SOURCE_DIR}/dependencies/vcos)
 #find the mmal libraries(I use conditional because I normally comile in pc)
 
-if(${CMAKE_SYSTEM_PROCESSOR} MATCHES arm*) 
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES arm*)
 FIND_LIBRARY(mmalcore_LIBS NAMES mmal_core PATHS /opt/vc/lib)
 FIND_LIBRARY(mmalutil_LIBS NAMES mmal_util PATHS /opt/vc/lib)
 FIND_LIBRARY(mmal_LIBS NAMES mmal PATHS /opt/vc/lib)
@@ -52,11 +52,11 @@ FIND_PACKAGE(OpenCV)
 IF(OpenCV_FOUND)
   include_directories(${OpenCV_INCLUDE_DIRS})
   SET(LIB_COMPONENTS ${LIB_COMPONENTS} ${PROJECT_NAME}_cv)
-  SET(PROJECT_CV_CREATED_FLAG "YES")  
+  SET(PROJECT_CV_CREATED_FLAG "YES")
 ENDIF()
 
 
- 
+
 # ----------------------------------------------------------------------------
 #   PROJECT CONFIGURATION
 #   force some variables that could be defined in the command line to be written to cache
@@ -193,7 +193,7 @@ IF(CMAKE_COMPILER_IS_GNUCXX OR MINGW)
 ENDIF	()
 
 IF(${CMAKE_SYSTEM_PROCESSOR} MATCHES armv6l ) ##BEAGLE BOARD
-  SET(EXTRA_C_FLAGS_RELEASE "${EXTRA_C_FLAGS_RELEASE} -mcpu=arm1176jzf-s  -mfpu=vfp -mfloat-abi=hard -ftree-vectorize")  
+  SET(EXTRA_C_FLAGS_RELEASE "${EXTRA_C_FLAGS_RELEASE} -mcpu=arm1176jzf-s  -mfpu=vfp -mfloat-abi=hard -ftree-vectorize")
 ENDIF()
 
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x -Wl,--no-as-needed")#for using condition variables
