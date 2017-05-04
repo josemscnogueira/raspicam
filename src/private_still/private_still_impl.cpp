@@ -824,9 +824,10 @@ int Private_Impl_Still::release(void)
 /**
  *
  */
-int Private_Impl_Still::takePicture(uchar* data, uint length)
+int Private_Impl_Still::takePicture(uchar* data, size_t length, size_t& offset)
 {
     std::cout << "taking picture...\n";
+    if (_raw_mode) offset = 0;
 
     int status = this->initialize();
     if (status != 0)
@@ -835,7 +836,7 @@ int Private_Impl_Still::takePicture(uchar* data, uint length)
         return (status < 0 ? status : -1);
     }
 
-    // usleep(5e6);
+    usleep(5e5);
     //
     // for (size_t idx = 0; idx < 10; ++idx)
     // {
@@ -870,6 +871,14 @@ int Private_Impl_Still::takePicture(uchar* data, uint length)
 
     this->stopCapture();
     delete userdata;
+
+    if (_raw_mode)
+    {
+        if (userdata->data_offset > this->IMX219_RAWOFFSET[_sensor_mode])
+        {
+            offset = userdata->data_offset - this->IMX219_RAWOFFSET[_sensor_mode];
+        }
+    }
 
     //     std::cout << "taking picture...DONE in " << float(TIMER_usecElapsedUs(&timer)) / 1e6 << "secs\n";
     // }

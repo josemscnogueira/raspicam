@@ -2,8 +2,7 @@
  * @file   raspicam_still.h
  * @author Jose Nogueira, josenogueira@biosurfit.com
  * @date   May 2017
- * @brief  Private implementation of camera in still mode
- *         Uses picture port
+ * @brief  RaspberryPi Camera for Still capture
  *
  * (extensive explanation)
  */
@@ -47,7 +46,7 @@ namespace raspicam
 
         // Grabs and set the data into the data buffer which has the indicated length. It is your responsability
         // to alloc the buffer. You can use getImageBufferSize for that matter.
-        int grab_retrieve(unsigned char* data, unsigned int length);
+        int grab_retrieve(unsigned char* data, size_t length, size_t& offset);
 
         // Releases the camera
         bool release(void);

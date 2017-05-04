@@ -165,7 +165,8 @@ namespace raspicam
                                       uint                        length           );
             void   stopCapture(       void);
             int    takePicture(       uchar*                      data_preallocated,
-                                      uint                        length           );
+                                      size_t                      length           ,
+                                      size_t&                     offset           );
 
             size_t getImageBufferSize(void) const;
 

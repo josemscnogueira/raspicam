@@ -2,8 +2,7 @@
  * @file   raspicam_still.h
  * @author Jose Nogueira, josenogueira@biosurfit.com
  * @date   May 2017
- * @brief  Private implementation of camera in still mode
- *         Uses picture port
+ * @brief  RaspberryPi Camera for Still capture
  *
  * (extensive explanation)
  */
@@ -36,7 +35,8 @@ bool   RaspiCam_Still::release(void) { return (_impl->release()    == 0); }
 
 size_t RaspiCam_Still::getImageBufferSize(void         ) const   { return _impl-> getImageBufferSize(); }
 int    RaspiCam_Still::grab_retrieve(     unsigned char* data  ,
-                                          unsigned int   length) { return _impl->takePicture(data, length); }
+                                          size_t         length,
+                                          size_t&        offset) { return _impl->takePicture(data, length, offset); }
 
 
 /**
