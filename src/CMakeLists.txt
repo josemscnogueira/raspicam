@@ -4,7 +4,7 @@ SET(private_still_hdrs_base "private_still/private_still_types.h  private/privat
 
 SET(public_hdrs_base raspicamtypes.h raspicam.h)
 
-SET(srcs_base raspicam.cpp raspicam_still.cpp  private/private_impl.cpp private/threadcondition.cpp  private_still/private_still_impl.cpp)
+SET(srcs_base raspicam.cpp raspicam_still.cpp  raspicam_raw_parser.cpp private/private_impl.cpp private/threadcondition.cpp  private_still/private_still_impl.cpp)
 if(NOT( ${CMAKE_SYSTEM_PROCESSOR} MATCHES arm*) )#in a pc, adds fake dependencies to mmal functions to enable compilation
 SET(srcs_base ${srcs_base} private/fake_mmal_dependencies.cpp)
 endif()
