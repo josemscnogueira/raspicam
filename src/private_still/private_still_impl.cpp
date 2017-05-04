@@ -16,6 +16,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 #include <semaphore.h>
 
 #include "interfaces/mmal/mmal_buffer.h"
@@ -32,6 +33,8 @@
  */
 #define PREVIEW_DEFAULT_WIDTH   640
 #define PREVIEW_DEFAULT_HEIGHT  480
+
+#define IMX219_SENSORMODES        8
 
 
 namespace raspicam
@@ -215,6 +218,30 @@ static void encoder_buffer_callback(MMAL_PORT_T*          port  ,
  **************************************************************************************************/
 const std::string Private_Impl_Still::API_NAME = "PRIVATE_IMPL_RaspiCamStill";
 
+const uint Private_Impl_Still::IMX219_RAWOFFSET[] =
+{
+    10270208, // Sensor mode 0
+     2678784, //             1
+    10270208, //             2
+    10270208, //             3
+     2628608, //             4
+     1963008, //             5
+     1233920, //             6
+      445440, //             7
+};
+
+const uint Private_Impl_Still::IMX219_RESOLUTIONS[][2] =
+{
+    {3280, 2464}, // Sensor mode 0
+    {1920, 1080}, //             1
+    {3280, 2464}, //             2
+    {3280, 2464}, //             3
+    {1640, 1232}, //             4
+    {1640,  922}, //             5
+    {1280,  720}, //             6
+    { 640,  480}, //             7
+};
+
 
 /**
  *
@@ -281,11 +308,9 @@ void Private_Impl_Still::getSensorInfo(void)
 
                 // Restore camera name
                 _sensor_name = camera_info_param.cameras[_camera_idx].camera_name;
-                _sensor_name.resize(MMAL_PARAMETER_CAMERA_INFO_MAX_STR_LEN);
+                std::transform(_sensor_name.begin(), _sensor_name.end(), _sensor_name.begin(), ::tolower);
 
                 std::cout << "Recognized sensor " << _sensor_name << '\n';
-                std::cout << "    -> width  ⁼ "   << _width       << '\n';
-                std::cout << "    -> height ⁼ "   << _height      << '\n';
             }
         }
 
@@ -296,8 +321,8 @@ void Private_Impl_Still::getSensorInfo(void)
     if ( (_width  == 0) ||
          (_height == 0)   )
     {
-        _width  = 3280;
-        _height = 2464;
+        _width  = this->IMX219_RESOLUTIONS[0][0];
+        _height = this->IMX219_RESOLUTIONS[0][1];
     }
 }
 
@@ -799,7 +824,7 @@ int Private_Impl_Still::release(void)
 /**
  *
  */
-bool Private_Impl_Still::takePicture(uchar* data, uint length)
+int Private_Impl_Still::takePicture(uchar* data, uint length)
 {
     std::cout << "taking picture...\n";
 
@@ -807,7 +832,7 @@ bool Private_Impl_Still::takePicture(uchar* data, uint length)
     if (status != 0)
     {
         std::cerr << API_NAME << ": Failed to take picture | camera was not initialized.\n";
-        return status;
+        return (status < 0 ? status : -1);
     }
 
     // usleep(5e6);
@@ -817,39 +842,39 @@ bool Private_Impl_Still::takePicture(uchar* data, uint length)
     //     TIMER_usecCtx_t timer;
     //     TIMER_usecStart(&timer);
 
-        // Init semaphore
-        sem_t     mutex;
-        sem_init(&mutex, 0, 0);
+    // Init semaphore
+    sem_t     mutex;
+    sem_init(&mutex, 0, 0);
 
-        RASPICAM_USERDATA* userdata = new RASPICAM_USERDATA();
-                           userdata->handle_camera   = this;
-                           userdata->encoder_pool    = _encoder_pool;
-                           userdata->mutex           = &mutex;
-                           userdata->data            = data;
-                           userdata->data_offset     = 0;
-                           userdata->image_offset    = 0;
-                           userdata->length          = length;
-                           userdata->callback_image  = NULL;
+    RASPICAM_USERDATA* userdata = new RASPICAM_USERDATA();
+                       userdata->handle_camera   = this;
+                       userdata->encoder_pool    = _encoder_pool;
+                       userdata->mutex           = &mutex;
+                       userdata->data            = data;
+                       userdata->data_offset     = 0;
+                       userdata->image_offset    = 0;
+                       userdata->length          = length;
+                       userdata->callback_image  = NULL;
 
-        _port_encoder_output->userdata = (struct MMAL_PORT_USERDATA_T *) userdata;
+    _port_encoder_output->userdata = (struct MMAL_PORT_USERDATA_T *) userdata;
 
-        if ( (status = this->startCapture()) != 0 )
-        {
-            delete userdata;
-            return false;
-        }
-
-        // Semaphore barrier
-        sem_wait(   &mutex);
-        sem_destroy(&mutex);
-
-        this->stopCapture();
+    if ( (status = this->startCapture()) != 0 )
+    {
         delete userdata;
+        return -1;
+    }
+
+    // Semaphore barrier
+    sem_wait(   &mutex);
+    sem_destroy(&mutex);
+
+    this->stopCapture();
+    delete userdata;
 
     //     std::cout << "taking picture...DONE in " << float(TIMER_usecElapsedUs(&timer)) / 1e6 << "secs\n";
     // }
 
-    return true;
+    return userdata->data_offset;
 }
 
 
@@ -858,8 +883,14 @@ bool Private_Impl_Still::takePicture(uchar* data, uint length)
  */
 size_t Private_Impl_Still::getImageBufferSize(void) const
 {
-    // For bmp images only!!! oversize the buffer so to fit BMP images
-    return (_width * _height * 3) + 54;
+    size_t n = (_width * _height * 3) + 54; // Image size * channels + bmp header
+
+    if (_raw_mode)
+    {
+        if (_sensor_name == "imx219") n += this->IMX219_RAWOFFSET[_sensor_mode] + 1;
+    }
+
+    return n;
 }
 
 
@@ -900,7 +931,7 @@ int Private_Impl_Still::startCapture(void)
     }
 
     // Enable raw mode capture if specified
-    if (_raw_mode || true)
+    if (_raw_mode)
     {
         if (mmal_port_parameter_set_boolean(_port_camera, MMAL_PARAMETER_ENABLE_RAW_CAPTURE, 1) != MMAL_SUCCESS)
         {
@@ -977,8 +1008,15 @@ void Private_Impl_Still::stopCapture(void)
  */
 void Private_Impl_Still::setSensorMode(const int value)
 {
-    _sensor_mode      = value;
-    _settings_changed = true;
+    if ( (_sensor_name == "imx219"         ) &&
+         (_sensor_mode < IMX219_SENSORMODES)   )
+    {
+        _sensor_mode      = value;
+        this->setResolution(this->IMX219_RESOLUTIONS[_sensor_mode][0],
+                            this->IMX219_RESOLUTIONS[_sensor_mode][1]);
+
+        _settings_changed = true;
+    }
 }
 
 

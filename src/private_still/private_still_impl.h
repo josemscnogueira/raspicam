@@ -146,6 +146,9 @@ namespace raspicam
         public:
             static const std::string API_NAME;
 
+            static const uint         IMX219_RAWOFFSET[];
+            static const uint         IMX219_RESOLUTIONS[][2];
+
             // Constructor
             Private_Impl_Still(void);
 
@@ -161,8 +164,8 @@ namespace raspicam
                                       uint                        offset           ,
                                       uint                        length           );
             void   stopCapture(       void);
-            bool   takePicture(       uchar*                      data_preallocated,
-                                      uint                        length );
+            int    takePicture(       uchar*                      data_preallocated,
+                                      uint                        length           );
 
             size_t getImageBufferSize(void) const;
 

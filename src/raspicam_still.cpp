@@ -35,7 +35,7 @@ bool   RaspiCam_Still::open(   void) { return (_impl->initialize() == 0); }
 bool   RaspiCam_Still::release(void) { return (_impl->release()    == 0); }
 
 size_t RaspiCam_Still::getImageBufferSize(void         ) const   { return _impl-> getImageBufferSize(); }
-bool   RaspiCam_Still::grab_retrieve(     unsigned char* data  ,
+int    RaspiCam_Still::grab_retrieve(     unsigned char* data  ,
                                           unsigned int   length) { return _impl->takePicture(data, length); }
 
 
