@@ -29,7 +29,6 @@
 
 namespace raspicam
 {
-
 /**
  *
  */
@@ -68,22 +67,52 @@ Type_BRCMHeader parse_brcm_header(uint8_t*      data,
 /**
  *
  */
-void depad_image_raw(uint8_t*      data_in   ,
-                     const size_t  length_in ,
-                     uint16_t**    data_out  ,
-                     size_t&       length_out)
+cv::Mat load_bcrm_image_raw(uint8_t* data, const size_t length)
+{
+    uint16_t* image_raw_data;
+    size_t    image_raw_size = 0;
+    size_t    image_raw_width, image_raw_height;
+
+    // Depack broadcom raw image
+    internal::depad_image_raw(data, length, &image_raw_data, image_raw_size, image_raw_width, image_raw_height);
+
+    // Check loaded image size
+    if (image_raw_size == 0) return cv::Mat();
+
+    // Create image header
+    cv::Mat image_raw = cv::Mat(cv::Size(image_raw_width,image_raw_height), CV_16UC1, image_raw_data).clone();
+
+    free(image_raw_data);
+
+    return image_raw;
+}
+
+
+namespace internal
+{
+/**
+ *
+ */
+void depad_image_raw(uint8_t*      data_in     ,
+                     const size_t  length_in   ,
+                     uint16_t**    data_out    ,
+                     size_t&       length_out  ,
+                     size_t&       image_width ,
+                     size_t&       image_height)
 {
     // Parse Header
     Type_BRCMHeader image_header;
                     image_header = parse_brcm_header(data_in, length_in);
                     length_out   = 0;
+                    image_width  = 0;
+                    image_height = 0;
 
     // Verify that image_header was correctly parsed
     if (image_header.width == 0) return;
 
     // (from dcraw https://github.com/6by9/RPiTest)
-    const unsigned short image_width  = image_header.width;
-    const unsigned short image_height = image_header.height;
+    image_width  = image_header.width;
+    image_height = image_header.height;
     // Define depad algorithm variables
     // (x * 5) + 3 >> 2 is the same as ceil(x*5.0/4.0) but faster (10bit pixel and 8bit packed format)
     //   + align 32 ----> 0x1F is 31
@@ -93,7 +122,7 @@ void depad_image_raw(uint8_t*      data_in   ,
     // const          short depad_order  = 0x4d4d;
 
     // Reserve memory for output image
-    length_out  = image_width * image_height;
+    length_out  = image_width * image_height * sizeof(uint16_t);
     (*data_out) = (uint16_t*) malloc(length_out);
 
     // Unpack 10bit values into 16bit data
@@ -111,4 +140,6 @@ void depad_image_raw(uint8_t*      data_in   ,
     }
 }
 
-}
+} // End of namespace raspicam::internal
+
+} // End of namespace raspicam

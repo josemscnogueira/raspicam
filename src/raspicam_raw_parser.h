@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <stdio.h>
 
+#include "opencv2/core/core.hpp"
+
 
 /**
  * Enums
@@ -48,13 +50,21 @@ namespace raspicam
         uint8_t   bayer_format;
     } Type_BRCMHeader;
 
-    Type_BRCMHeader parse_brcm_header(uint8_t*      data  ,
-                                      const size_t  length);
+    Type_BRCMHeader parse_brcm_header(  uint8_t*      data  ,
+                                        const size_t  length);
 
-    void            depad_image_raw(  uint8_t*      data_in   ,
-                                      const size_t  length_in ,
-                                      uint16_t**    data_out  ,
-                                      size_t&       length_out);
+    cv::Mat         load_bcrm_image_raw(uint8_t*      data  ,
+                                        const size_t  length);
+
+    namespace internal
+    {
+        void        depad_image_raw(    uint8_t*      data_in     ,
+                                        const size_t  length_in   ,
+                                        uint16_t**    data_out    ,
+                                        size_t&       length_out  ,
+                                        size_t&       image_width ,
+                                        size_t&       image_height);
+    }
 
 
 

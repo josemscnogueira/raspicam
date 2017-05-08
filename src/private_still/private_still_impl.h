@@ -54,6 +54,7 @@ namespace raspicam
         private:
             // Attributes
             bool                       _is_initialized;
+            bool                       _is_capturing;
                 // MMAL Attributes
             MMAL_COMPONENT_T*          _camera;             // Pointer to the camera component
             MMAL_COMPONENT_T*          _encoder;            // Pointer to the encoder component
@@ -155,7 +156,7 @@ namespace raspicam
             // Destructor
             ~Private_Impl_Still(void) { this->release(); };
 
-            int    initialize(        void);
+            int    initialize(        const long int sleep_ready_ms = 500);
             int    release(           void);
             int    commitParameters(  void);
 
@@ -166,7 +167,8 @@ namespace raspicam
             void   stopCapture(       void);
             int    takePicture(       uchar*                      data_preallocated,
                                       size_t                      length           ,
-                                      size_t&                     offset           );
+                                      size_t&                     offset           ,
+                                      const bool                  single = true    );
 
             size_t getImageBufferSize(void) const;
 

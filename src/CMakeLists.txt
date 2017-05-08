@@ -18,7 +18,7 @@ SET_TARGET_PROPERTIES(${PROJECT_NAME} PROPERTIES 				# create *nix style library
 	CLEAN_DIRECT_OUTPUT 1 										# allow creating static and shared libs without conflicts
 	OUTPUT_NAME "${PROJECT_NAME}${PROJECT_DLLVERSION}" 	# avoid conflicts between library and binary target names
 )
-TARGET_LINK_LIBRARIES(${PROJECT_NAME}  ${REQUIRED_LIBRARIES}  )
+TARGET_LINK_LIBRARIES(${PROJECT_NAME}  ${REQUIRED_LIBRARIES}  ${OpenCV_LDFLAGS})
 
 INSTALL(TARGETS ${PROJECT_NAME}
 	RUNTIME DESTINATION bin COMPONENT main

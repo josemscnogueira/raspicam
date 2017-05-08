@@ -250,6 +250,7 @@ Private_Impl_Still::Private_Impl_Still(void)
 {
     // Camera initialized flag
     _is_initialized      = false;
+    _is_capturing        = false;
 
     // MMAL Components pointers
     _camera              = NULL;
@@ -743,7 +744,7 @@ void Private_Impl_Still::destroyEncoder(void)
 /**
  *
  */
-int Private_Impl_Still::initialize(void)
+int Private_Impl_Still::initialize(const long int sleep_ready_ms)
 {
     if (_is_initialized) return 0;
 
@@ -779,6 +780,10 @@ int Private_Impl_Still::initialize(void)
     }
 
     _is_initialized = true;
+
+    // Sleep, camera must be ready before taking photos
+    if (sleep_ready_ms > 0) usleep(sleep_ready_ms * 1000);
+
     return 0;
 }
 
@@ -790,31 +795,33 @@ int Private_Impl_Still::release(void)
 {
     if (!_is_initialized) return 0;
 
+    if (_is_capturing) this->stopCapture();
+
     // Disable all our ports that are not handled by connections
     if (_port_encoder_output && _port_encoder_output->is_enabled) mmal_port_disable(_port_encoder_output);
-    std::cout << "release() | camera port disabled\n";
+    std::cerr << API_NAME << ": camera port disabled\n";
 
     // Destroy encoder connection
     if (_encoder_connection) mmal_connection_destroy(_encoder_connection);
-    std::cout << "release() | encoder connection destroyed\n";
+    std::cerr << API_NAME << ":  encoder connection destroyed\n";
 
     if (_encoder) mmal_component_disable(_encoder);
-    std::cout << "release() | encoder component disabled\n";
+    std::cerr << API_NAME << ":  encoder component disabled\n";
 
     if (_camera) mmal_component_disable(_camera);
-    std::cout << "release() | camera component disabled\n";
+    std::cerr << API_NAME << ":  camera component disabled\n";
 
     // Get rid of any port buffers first
     if (_encoder_pool) mmal_port_pool_destroy(_encoder->output[0], _encoder_pool);
-    std::cout << "release() | encoder pool destroyed\n";
+    std::cerr << API_NAME << ":  encoder pool destroyed\n";
 
     if (_encoder) mmal_component_destroy(_encoder);
     _encoder = NULL;
-    std::cout << "release() | encoder component destroyed\n";
+    std::cerr << API_NAME << ":  encoder component destroyed\n";
 
     if (_camera) mmal_component_destroy(_camera);
     _camera = NULL;
-    std::cout << "release() | camera component destroyed\n";
+    std::cerr << API_NAME << ":  camera component destroyed\n";
 
     _is_initialized = false;
     return 0;
@@ -824,9 +831,9 @@ int Private_Impl_Still::release(void)
 /**
  *
  */
-int Private_Impl_Still::takePicture(uchar* data, size_t length, size_t& offset)
+int Private_Impl_Still::takePicture(uchar* data, size_t length, size_t& offset, const bool single)
 {
-    std::cout << "taking picture...\n";
+    std::cerr << API_NAME << ": taking picture...\n";
     if (_raw_mode) offset = 0;
 
     int status = this->initialize();
@@ -836,12 +843,8 @@ int Private_Impl_Still::takePicture(uchar* data, size_t length, size_t& offset)
         return (status < 0 ? status : -1);
     }
 
-    usleep(5e5);
-    //
-    // for (size_t idx = 0; idx < 10; ++idx)
-    // {
-    //     TIMER_usecCtx_t timer;
-    //     TIMER_usecStart(&timer);
+    // Enable capturing flag
+    _is_capturing = true;
 
     // Init semaphore
     sem_t     mutex;
@@ -861,7 +864,9 @@ int Private_Impl_Still::takePicture(uchar* data, size_t length, size_t& offset)
 
     if ( (status = this->startCapture()) != 0 )
     {
+        sem_destroy(&mutex);
         delete userdata;
+
         return -1;
     }
 
@@ -869,21 +874,20 @@ int Private_Impl_Still::takePicture(uchar* data, size_t length, size_t& offset)
     sem_wait(   &mutex);
     sem_destroy(&mutex);
 
-    this->stopCapture();
+    // Calculate image offset, in case we are taking raw images
+    const size_t data_offset = userdata->data_offset;
+    if (_raw_mode && (data_offset > this->IMX219_RAWOFFSET[_sensor_mode]) )
+    {
+        offset = data_offset - this->IMX219_RAWOFFSET[_sensor_mode];
+    }
     delete userdata;
 
-    if (_raw_mode)
-    {
-        if (userdata->data_offset > this->IMX219_RAWOFFSET[_sensor_mode])
-        {
-            offset = userdata->data_offset - this->IMX219_RAWOFFSET[_sensor_mode];
-        }
-    }
+    // Disable capture
+    if (single) this->stopCapture();
 
-    //     std::cout << "taking picture...DONE in " << float(TIMER_usecElapsedUs(&timer)) / 1e6 << "secs\n";
-    // }
+    std::cerr << API_NAME << ": taking picture...DONE\n";
 
-    return userdata->data_offset;
+    return data_offset;
 }
 
 
@@ -894,9 +898,9 @@ size_t Private_Impl_Still::getImageBufferSize(void) const
 {
     size_t n = (_width * _height * 3) + 54; // Image size * channels + bmp header
 
-    if (_raw_mode)
+    if ( _raw_mode && (_sensor_name == "imx219") )
     {
-        if (_sensor_name == "imx219") n += this->IMX219_RAWOFFSET[_sensor_mode] + 1;
+        n += this->IMX219_RAWOFFSET[_sensor_mode] + 1;
     }
 
     return n;
@@ -958,17 +962,14 @@ int Private_Impl_Still::startCapture(void)
         return -1;
     }
 
-    if (_port_encoder_output->is_enabled)
+    if (!_port_encoder_output->is_enabled)
     {
-        std::cerr << API_NAME << ": Could not enable encoder output port. Try waiting longer before attempting to take another picture.\n";
-        return -1;
-    }
-
-    // Enable encoder output port
-    if (mmal_port_enable(_port_encoder_output, encoder_buffer_callback) != MMAL_SUCCESS)
-    {
-        std::cerr << API_NAME << ": Could not enable encoder output port.\n";
-        return -1;
+        // Enable encoder output port
+        if (mmal_port_enable(_port_encoder_output, encoder_buffer_callback) != MMAL_SUCCESS)
+        {
+            std::cerr << API_NAME << ": Could not enable encoder output port.\n";
+            return -1;
+        }
     }
 
     const int queue_size = mmal_queue_length(_encoder_pool->queue);
@@ -1003,6 +1004,8 @@ int Private_Impl_Still::startCapture(void)
  */
 void Private_Impl_Still::stopCapture(void)
 {
+    _is_capturing = false;
+
     if (!_port_encoder_output->is_enabled) return;
 
     if (mmal_port_disable(_port_encoder_output))
