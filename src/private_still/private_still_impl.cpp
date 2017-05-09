@@ -1089,6 +1089,8 @@ void Private_Impl_Still::setupRawMode(const int sensor_mode)
         this->setResolution(this->IMX219_RESOLUTIONS_MIN[_sensor_mode][0],
                             this->IMX219_RESOLUTIONS_MIN[_sensor_mode][1]);
     }
+
+    this->setImageEncoding(raspicam::RASPICAM_ENCODING_BMP);
 }
 
 
