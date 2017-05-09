@@ -15,10 +15,8 @@
 int main (int argc, char *argv[])
 {
     raspicam::RaspiCam_Still cam;
-                             cam.setImageEncoding(raspicam::RASPICAM_ENCODING_BMP);
-                             cam.setRawMode(true);
-                             cam.setSensorMode(5);
-                             cam.setResolution(32,18);
+                            //  cam.setImageEncoding(raspicam::RASPICAM_ENCODING_BMP);
+                             cam.setupRawMode(5);
                              cam.open();
     size_t          length = cam.getImageBufferSize(); // Header + Image Data + Padding
     int             rc_b   = 0;

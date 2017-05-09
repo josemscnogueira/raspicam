@@ -149,6 +149,7 @@ namespace raspicam
 
             static const uint         IMX219_RAWOFFSET[];
             static const uint         IMX219_RESOLUTIONS[][2];
+            static const uint         IMX219_RESOLUTIONS_MIN[][2];
 
             // Constructor
             Private_Impl_Still(void);
@@ -177,6 +178,8 @@ namespace raspicam
             size_t getImageBufferSize(void) const;
 
             // Setters
+            void   setupRawMode(           const int                   sensor_mode = -1          );
+
             void   setRawMode(             const bool                  value                     );
             void   setSensorMode(          const int                   value                     );
             void   setResolution(          const uint                  width, const uint   height);

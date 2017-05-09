@@ -59,6 +59,8 @@ namespace raspicam
         int commitParameters(void);
 
         // Setters
+        void   setupRawMode(           const int                   value = -1                      );
+
         void   setRawMode(             const bool                  value                           );
         void   setSensorMode(          const int                   value                           );
         void   setResolution(          const unsigned int          width, const unsigned int height);

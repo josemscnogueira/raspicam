@@ -242,6 +242,18 @@ const uint Private_Impl_Still::IMX219_RESOLUTIONS[][2] =
     { 640,  480}, //             7
 };
 
+const uint Private_Impl_Still::IMX219_RESOLUTIONS_MIN[][2] =
+{
+    {32, 24}, // Sensor mode 0
+    {32, 18}, //             1
+    {32, 24}, //             2
+    {32, 24}, //             3
+    {32, 24}, //             4
+    {32, 18}, //             5
+    {32, 18}, //             6
+    {32, 24}, //             7
+};
+
 
 /**
  *
@@ -1055,6 +1067,27 @@ void Private_Impl_Still::setSensorMode(const int value)
                             this->IMX219_RESOLUTIONS[_sensor_mode][1]);
 
         _settings_changed = true;
+    }
+}
+
+
+/**
+ *
+ */
+void Private_Impl_Still::setupRawMode(const int sensor_mode)
+{
+    // Activate Raw Mode
+    this->setRawMode(true);
+
+    // Select sensor mode
+    if (sensor_mode >= 0) this->setSensorMode(sensor_mode);
+
+    // Select optimal resolution for unused encoded image (to reduce capture time)
+    if ( (_sensor_name == "imx219"         ) &&
+         (_sensor_mode < IMX219_SENSORMODES)   )
+    {
+        this->setResolution(this->IMX219_RESOLUTIONS_MIN[_sensor_mode][0],
+                            this->IMX219_RESOLUTIONS_MIN[_sensor_mode][1]);
     }
 }
 

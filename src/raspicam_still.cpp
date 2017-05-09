@@ -47,6 +47,9 @@ int    RaspiCam_Still::captureFrameRaw(   unsigned char*  data    ,
  */
 int RaspiCam_Still::commitParameters(void) { return _impl->commitParameters(); }
 // Setters
+void   RaspiCam_Still::setupRawMode(           const int                   value                           )
+              { _impl->setupRawMode(                                       value                           ); }
+
 void   RaspiCam_Still::setRawMode(             const bool                  value                           )
               { _impl->setRawMode(                                         value                           ); }
 void   RaspiCam_Still::setSensorMode(          const int                   value                           )
