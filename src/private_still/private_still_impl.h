@@ -169,6 +169,10 @@ namespace raspicam
                                       size_t                      length           ,
                                       size_t&                     offset           ,
                                       const bool                  single = true    );
+            int    takePictureRaw(    uchar*                      data             ,
+                                      size_t                      length           ,
+                                      uchar**                     data_raw_ptr     ,
+                                      const bool                  single           );
 
             size_t getImageBufferSize(void) const;
 

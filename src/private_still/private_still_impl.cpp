@@ -894,6 +894,33 @@ int Private_Impl_Still::takePicture(uchar* data, size_t length, size_t& offset, 
 /**
  *
  */
+int Private_Impl_Still::takePictureRaw(uchar* data, size_t length, uchar** data_raw_ptr, const bool single)
+{
+    if (!_raw_mode) this->setRawMode(true);
+
+    size_t     offset_raw = 0;
+    int        rc_bytes   = this->takePicture(data, length, offset_raw, single);
+
+    const int  length_raw = rc_bytes - offset_raw;
+
+    if (length_raw == int(this->IMX219_RAWOFFSET[_sensor_mode]))
+    {
+        (*data_raw_ptr)  = data + offset_raw;
+        rc_bytes        -= offset_raw;
+    }
+    else
+    {
+        (*data_raw_ptr) = NULL;
+        rc_bytes        = -1;
+    }
+
+    return rc_bytes;
+}
+
+
+/**
+ *
+ */
 size_t Private_Impl_Still::getImageBufferSize(void) const
 {
     size_t n = (_width * _height * 3) + 54; // Image size * channels + bmp header
