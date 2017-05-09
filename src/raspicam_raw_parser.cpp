@@ -15,6 +15,8 @@
 #include <cstring>
 #include <iostream>
 
+#include <opencv2/imgproc/imgproc.hpp>
+
 
 /**
  * Definitions
@@ -85,6 +87,32 @@ cv::Mat load_bcrm_image_raw(uint8_t* data, const size_t length)
     free(image_raw_data);
 
     return image_raw;
+}
+
+
+/**
+ *
+ */
+int debayer_bcrm_image_raw(cv::Mat& image, const cv::Size resolution_resize)
+{
+    // Debayer image
+    cv::cvtColor(image, image, cv::COLOR_BayerRG2BGR);
+
+    // Gaussian bluer needed to remove debayer artifacts
+    cv::GaussianBlur(image, image, cv::Size(3,3), 1);
+
+    // Convert image to float
+    image.convertTo(image, CV_32FC3);
+    image = image / 0x400; // 10bit
+
+    // Resize image if specified
+    if ( (resolution_resize.width  > 0) &&
+         (resolution_resize.height > 0)   )
+    {
+        cv::resize(image, image, resolution_resize);
+    }
+
+    return 0;
 }
 
 

@@ -50,11 +50,14 @@ namespace raspicam
         uint8_t   bayer_format;
     } Type_BRCMHeader;
 
-    Type_BRCMHeader parse_brcm_header(  uint8_t*      data  ,
-                                        const size_t  length);
+    Type_BRCMHeader parse_brcm_header(     uint8_t*       data  ,
+                                           const size_t   length);
 
-    cv::Mat         load_bcrm_image_raw(uint8_t*      data  ,
-                                        const size_t  length);
+    cv::Mat         load_bcrm_image_raw(   uint8_t*       data  ,
+                                           const size_t   length);
+
+    int             debayer_bcrm_image_raw(cv::Mat&       image,
+                                           const cv::Size resolution_resize = cv::Size(-1,-1));
 
     namespace internal
     {

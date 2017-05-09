@@ -1,3 +1,4 @@
+#include <unistd.h>
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
@@ -17,6 +18,8 @@ int main (int argc, char *argv[])
     raspicam::RaspiCam_Still cam;
                             //  cam.setImageEncoding(raspicam::RASPICAM_ENCODING_BMP);
                              cam.setupRawMode(5);
+                             cam.setISO(100);
+                             cam.setShutterSpeed(2000);
                              cam.open();
     size_t          length = cam.getImageBufferSize(); // Header + Image Data + Padding
     int             rc_b   = 0;
@@ -48,6 +51,9 @@ int main (int argc, char *argv[])
     if (data_raw != NULL)
     {
         cv::Mat image_raw = raspicam::load_bcrm_image_raw(data_raw, rc_b);
+
+        raspicam::debayer_bcrm_image_raw(image_raw, cv::Size(640,360));
+        image_raw = image_raw * 255;
 
         // cv::imshow("Final image", image_raw);
         cv::imwrite("image_raw.jpg", image_raw);
