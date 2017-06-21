@@ -57,7 +57,8 @@ namespace raspicam
                                            const size_t   length);
 
     int             debayer_bcrm_image_raw(cv::Mat&       image,
-                                           const cv::Size resolution_resize = cv::Size(-1,-1));
+                                           const cv::Size resolution_resize = cv::Size(-1,-1),
+                                           const bool     blur              = true          );
 
     namespace internal
     {

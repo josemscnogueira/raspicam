@@ -93,13 +93,13 @@ cv::Mat load_bcrm_image_raw(uint8_t* data, const size_t length)
 /**
  *
  */
-int debayer_bcrm_image_raw(cv::Mat& image, const cv::Size resolution_resize)
+int debayer_bcrm_image_raw(cv::Mat& image, const cv::Size resolution_resize, const bool blur)
 {
     // Debayer image
     cv::cvtColor(image, image, cv::COLOR_BayerRG2BGR);
 
     // Gaussian bluer needed to remove debayer artifacts
-    cv::GaussianBlur(image, image, cv::Size(3,3), 1);
+    if (blur) cv::GaussianBlur(image, image, cv::Size(3,3), 1);
 
     // Convert image to float
     image.convertTo(image, CV_32FC3);
